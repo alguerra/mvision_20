@@ -1,0 +1,28 @@
+[Unit]
+Description=Sistema de Monitoramento de Quedas Hospitalares
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/hospital-monitor
+ExecStart=/usr/bin/python3 /opt/hospital-monitor/main.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/hospital-monitor/service.log
+StandardError=append:/var/log/hospital-monitor/service.log
+
+# Watchdog do systemd (service deve enviar heartbeat)
+WatchdogSec=60
+
+# Variaveis de ambiente
+Environment=PYTHONUNBUFFERED=1
+
+# Limites de recursos
+MemoryMax=512M
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target

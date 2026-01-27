@@ -1,0 +1,23 @@
+# Dependencias para producao no Raspberry Pi (Linux)
+# Instalar com: pip install -r requirements_raspberry.txt
+
+# Processamento de imagem e video
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Deteccao de objetos e pose (YOLOv8)
+ultralytics>=8.0.0
+
+# Camera do Raspberry Pi
+picamera2>=0.3.12
+
+# GPIO para alertas visuais (LEDs)
+RPi.GPIO>=0.7.0
+
+# Dependencias do picamera2 (instalar via apt no Raspberry Pi OS)
+# sudo apt install -y python3-libcamera python3-kms++
+# sudo apt install -y python3-picamera2
+
+# Nota: No Raspberry Pi OS (Bookworm), picamera2 e RPi.GPIO ja vem pre-instalados
+# Se necessario instalar manualmente:
+# sudo apt install -y python3-picamera2 python3-rpi.gpio

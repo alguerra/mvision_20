@@ -1,0 +1,13 @@
+# Dependencias para desenvolvimento no Windows
+# Instalar com: pip install -r requirements_windows.txt
+
+# Processamento de imagem e video
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Deteccao de objetos e pose (YOLOv8)
+ultralytics>=8.0.0
+
+# Dependencias do ultralytics (instaladas automaticamente)
+# torch
+# torchvision
