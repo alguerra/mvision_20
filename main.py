@@ -36,6 +36,7 @@ from config import (
     CALIBRATION_SUCCESS_DISPLAY_SECONDS,
     CAMERA_INDEX,
     DEV_MODE,
+    DEV_SKIP_BED_DETECTION,
     FLIP_HORIZONTAL,
     FRAME_DELAY_SECONDS,
     POSE_CONFIDENCE_HIGH,
@@ -274,6 +275,8 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
     print("    Modulos inicializados")
     if DEV_MODE:
         print("    Modo desenvolvimento ATIVO - imagens de alerta serao salvas")
+    if DEV_SKIP_BED_DETECTION:
+        print("    Modo DEV_SKIP_BED_DETECTION ATIVO - deteccao de cama ignorada")
     if FLIP_HORIZONTAL:
         print("    Flip horizontal ATIVO")
 
@@ -368,8 +371,8 @@ def run_monitoring_loop(
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
 
-            # Re-check da cama se necessario
-            if bed_detector.needs_recheck():
+            # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION)
+            if not DEV_SKIP_BED_DETECTION and bed_detector.needs_recheck():
                 new_bbox = bed_detector.detect_bed(frame)
                 if new_bbox:
                     bed_bbox = new_bbox
@@ -520,6 +523,35 @@ def main():
             # Calibracao da cama
             print("\n[4/4] Calibrando sistema...")
             bed_bbox = None
+
+            # Modo desenvolvimento: ignora detecção e usa referência salva
+            if DEV_SKIP_BED_DETECTION:
+                print("    [DEV] Modo desenvolvimento ativo - ignorando deteccao de cama")
+                saved_bbox = bed_detector.load_reference()
+                if saved_bbox:
+                    bed_bbox = saved_bbox
+                    print(f"    [DEV] Usando referencia salva: {bed_bbox}")
+                else:
+                    print("    [DEV] ERRO: Nenhuma referencia salva encontrada!")
+                    print("    [DEV] Execute primeiro com DEV_SKIP_BED_DETECTION = False")
+                    print("    [DEV] para salvar uma referencia de cama.")
+
+                    # Mostra erro na tela
+                    ret, frame = camera.read()
+                    if ret and frame is not None:
+                        if FLIP_HORIZONTAL:
+                            frame = cv2.flip(frame, 1)
+                        frame = display.draw_system_message(
+                            frame,
+                            "ERRO: SEM REFERENCIA",
+                            "Execute primeiro sem DEV_SKIP_BED_DETECTION",
+                            color=(0, 0, 255),
+                        )
+                        display.render(frame)
+                        time.sleep(5)
+
+                    safe_cleanup(camera, display, gpio_manager)
+                    sys.exit(1)
 
             while bed_bbox is None:
                 print("    Iniciando calibracao automatica...")
