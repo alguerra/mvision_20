@@ -1,36 +1,49 @@
 [Unit]
 Description=Sistema de Monitoramento de Quedas Hospitalares
-# Aguarda a sessão gráfica estar pronta (importante para cv2.imshow)
-After=graphical-session.target network.target
-Wants=graphical-session.target
-StartLimitIntervalSec=60
-StartLimitBurst=5
+
+# Aguarda o ambiente gráfico estar pronto
+# graphical.target = sistema com GUI disponível
+After=graphical.target network.target
+Wants=graphical.target
+
+# Desabilita limite de reinicializações - SEMPRE reinicia
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=pi
+Group=pi
 WorkingDirectory=/opt/hospital-monitor
-ExecStart=/usr/bin/python3 /opt/hospital-monitor/main.py
+
+# Comando principal
+ExecStart=/usr/bin/python3 -u /opt/hospital-monitor/main.py
+
+# SEMPRE reinicia, não importa o motivo da falha
 Restart=always
-RestartSec=5
+RestartSec=10
+
+# Logs
 StandardOutput=append:/var/log/hospital-monitor/service.log
 StandardError=append:/var/log/hospital-monitor/service.log
 
-# Watchdog do systemd (service deve enviar heartbeat)
-WatchdogSec=120
-
-# Variaveis de ambiente para GUI
+# Variáveis de ambiente para GUI funcionar
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
+# Evita problemas com Qt/GTK
+Environment=QT_QPA_PLATFORM=xcb
 
-# Timeout maior para aguardar GUI inicializar
-TimeoutStartSec=180
+# Timeout para inicialização (o código aguarda GUI internamente)
+TimeoutStartSec=300
+TimeoutStopSec=30
 
-# Limites de recursos
+# Limites de recursos (previne consumo excessivo)
 MemoryMax=512M
 CPUQuota=80%
 
+# Permite acesso a GPIO e câmera
+SupplementaryGroups=gpio video
+
 [Install]
-# Usar graphical-session.target para garantir que GUI está pronta
-WantedBy=graphical-session.target
+# Inicia junto com o modo gráfico
+WantedBy=graphical.target

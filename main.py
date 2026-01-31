@@ -543,34 +543,17 @@ def main():
             print("\n[4/4] Calibrando sistema...")
             bed_bbox = None
 
-            # Modo desenvolvimento: ignora detecção e usa referência salva
+            # Modo desenvolvimento: tenta usar referência salva primeiro
             if DEV_SKIP_BED_DETECTION:
-                print("    [DEV] Modo desenvolvimento ativo - ignorando deteccao de cama")
+                print("    [DEV] Modo desenvolvimento ativo - buscando referencia salva")
                 saved_bbox = bed_detector.load_reference()
                 if saved_bbox:
                     bed_bbox = saved_bbox
                     print(f"    [DEV] Usando referencia salva: {bed_bbox}")
                 else:
-                    print("    [DEV] ERRO: Nenhuma referencia salva encontrada!")
-                    print("    [DEV] Execute primeiro com DEV_SKIP_BED_DETECTION = False")
-                    print("    [DEV] para salvar uma referencia de cama.")
-
-                    # Mostra erro na tela
-                    ret, frame = camera.read()
-                    if ret and frame is not None:
-                        if FLIP_HORIZONTAL:
-                            frame = cv2.flip(frame, 1)
-                        frame = display.draw_system_message(
-                            frame,
-                            "ERRO: SEM REFERENCIA",
-                            "Execute primeiro sem DEV_SKIP_BED_DETECTION",
-                            color=(0, 0, 255),
-                        )
-                        display.render(frame)
-                        time.sleep(5)
-
-                    safe_cleanup(camera, display, gpio_manager)
-                    sys.exit(1)
+                    print("    [DEV] AVISO: Nenhuma referencia salva encontrada")
+                    print("    [DEV] Iniciando calibracao automatica...")
+                    # Continua para calibracao normal em vez de sair
 
             while bed_bbox is None:
                 print("    Iniciando calibracao automatica...")
@@ -659,9 +642,12 @@ def main():
             display = None
             gpio_manager = None
 
+            # Continua tentando indefinidamente
+            # O watchdog de hardware reiniciará o sistema se necessário
             if init_attempts >= MAX_INIT_RETRIES:
-                logger.error(f"Falha apos {MAX_INIT_RETRIES} tentativas - encerrando")
-                sys.exit(1)
+                logger.warning(f"Ja foram {init_attempts} tentativas - continuando...")
+                # Envia heartbeat para evitar reinicio do watchdog
+                send_heartbeat()
 
             logger.info(f"Aguardando {INIT_RETRY_DELAY}s antes de tentar novamente...")
             time.sleep(INIT_RETRY_DELAY)
