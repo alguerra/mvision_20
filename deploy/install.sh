@@ -1,117 +1,135 @@
 #!/bin/bash
-# Script de instalacao do Sistema de Monitoramento no Raspberry Pi
-# Executar como root: sudo bash install.sh
+# =============================================================================
+# Script de instalação do Sistema de Monitoramento no Raspberry Pi
+# =============================================================================
+#
+# USO:
+#   cd /home/pi/mvision/deploy
+#   sudo bash install.sh
+#
+# O QUE FAZ:
+#   - Instala o serviço systemd (inicia automaticamente no boot)
+#   - Configura permissões para câmera e GPIO
+#   - NÃO copia arquivos - roda direto do diretório atual
+#
+# APÓS MODIFICAR O CÓDIGO:
+#   sudo systemctl restart hospital-monitor
+#
+# =============================================================================
 
 set -e
 
+# Detecta o diretório do código fonte (pai do deploy/)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
 echo "=============================================="
-echo "Instalacao do Sistema de Monitoramento"
+echo "Instalação do Sistema de Monitoramento"
 echo "=============================================="
+echo ""
+echo "Diretório do projeto: $PROJECT_DIR"
+echo ""
 
-# Diretorios
-INSTALL_DIR="/opt/hospital-monitor"
-CONFIG_DIR="/opt/hospital-monitor/config"
-LOG_DIR="/var/log/hospital-monitor"
-DATA_DIR="/opt/hospital-monitor/data"
-SOURCE_DIR="$(dirname "$0")/.."
-
-# 1. Cria diretorios
-echo "[1/7] Criando diretorios..."
-mkdir -p $INSTALL_DIR
-mkdir -p $CONFIG_DIR
-mkdir -p $LOG_DIR
-mkdir -p $DATA_DIR/logs
-mkdir -p $DATA_DIR/alert_images
-
-# 2. Copia arquivos do projeto
-echo "[2/7] Copiando arquivos do projeto..."
-cp -r $SOURCE_DIR/main.py $INSTALL_DIR/
-cp -r $SOURCE_DIR/config.py $INSTALL_DIR/
-cp -r $SOURCE_DIR/modules $INSTALL_DIR/
-cp -r $SOURCE_DIR/gui $INSTALL_DIR/
-cp -r $SOURCE_DIR/requirements_raspberry.txt $INSTALL_DIR/ 2>/dev/null || true
-
-# 3. Copia pasta data (referência de cama, logs, etc)
-echo "[3/7] Copiando dados pre-configurados..."
-if [ -d "$SOURCE_DIR/data" ]; then
-    # Copia mantendo arquivos existentes (nao sobrescreve)
-    cp -rn $SOURCE_DIR/data/* $DATA_DIR/ 2>/dev/null || true
-    echo "  Dados copiados de $SOURCE_DIR/data"
-
-    # Verifica se tem referencia de cama
-    if [ -f "$DATA_DIR/bed_reference.json" ]; then
-        echo "  Referencia de cama encontrada: bed_reference.json"
-    fi
-else
-    echo "  Pasta data/ nao encontrada no source, criando estrutura vazia"
+# Verifica se está rodando como root
+if [ "$EUID" -ne 0 ]; then
+    echo "ERRO: Execute como root:"
+    echo "  sudo bash install.sh"
+    exit 1
 fi
 
-# 4. Copia configuracao de ambiente
-echo "[4/7] Configurando ambiente..."
-if [ ! -f "$CONFIG_DIR/environment.json" ]; then
-    if [ -f "$SOURCE_DIR/config/environment.json" ]; then
-        cp $SOURCE_DIR/config/environment.json $CONFIG_DIR/environment.json
-        echo "  Configuracao copiada de config/environment.json"
-    elif [ -f "$SOURCE_DIR/config/environment.example.json" ]; then
-        cp $SOURCE_DIR/config/environment.example.json $CONFIG_DIR/environment.json
-        echo "  IMPORTANTE: Edite $CONFIG_DIR/environment.json com os dados do leito"
-    else
-        echo "  AVISO: Nenhum arquivo de configuracao encontrado"
-    fi
-else
-    echo "  Configuracao ja existe, mantendo..."
+# Verifica se main.py existe
+if [ ! -f "$PROJECT_DIR/main.py" ]; then
+    echo "ERRO: main.py não encontrado em $PROJECT_DIR"
+    exit 1
 fi
 
-# 5. Instala dependencias Python
-echo "[5/7] Instalando dependencias Python..."
-if [ -f "$INSTALL_DIR/requirements_raspberry.txt" ]; then
-    pip3 install -r $INSTALL_DIR/requirements_raspberry.txt
-else
-    echo "  requirements_raspberry.txt nao encontrado, instalando pacotes essenciais..."
-    pip3 install ultralytics opencv-python-headless numpy
-fi
+# 1. Configura o arquivo de serviço com o caminho correto
+echo "[1/4] Configurando serviço systemd..."
+cat > /etc/systemd/system/hospital-monitor.service << EOF
+[Unit]
+Description=Sistema de Monitoramento de Quedas Hospitalares
+After=graphical.target network.target
+Wants=graphical.target
+StartLimitIntervalSec=0
 
-# 6. Instala servico systemd
-echo "[6/7] Instalando servico systemd..."
-cp "$(dirname "$0")/hospital-monitor.service" /etc/systemd/system/
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/usr/bin/python3 -u $PROJECT_DIR/main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+TimeoutStartSec=300
+TimeoutStopSec=30
+MemoryMax=512M
+CPUQuota=80%
+SupplementaryGroups=gpio video
+
+[Install]
+WantedBy=graphical.target
+EOF
+
+echo "  Serviço configurado para: $PROJECT_DIR"
+
+# 2. Recarrega e habilita o serviço
+echo "[2/4] Habilitando serviço..."
 systemctl daemon-reload
 systemctl enable hospital-monitor
-echo "  Servico habilitado para iniciar no boot"
+echo "  Serviço habilitado para iniciar no boot"
 
-# 7. Configura permissoes
-echo "[7/7] Configurando permissoes..."
-chown -R pi:pi $INSTALL_DIR
-chown -R pi:pi $LOG_DIR
-chmod +x $INSTALL_DIR/main.py
+# 3. Configura permissões
+echo "[3/4] Configurando permissões..."
+chown -R pi:pi "$PROJECT_DIR"
+chmod +x "$PROJECT_DIR/main.py"
 
-# Adiciona usuario pi aos grupos necessarios
+# Adiciona usuário pi aos grupos necessários
 usermod -aG gpio pi 2>/dev/null || true
 usermod -aG video pi 2>/dev/null || true
+echo "  Usuário pi adicionado aos grupos gpio e video"
+
+# 4. Verifica arquivos importantes
+echo "[4/4] Verificando configuração..."
+if [ -f "$PROJECT_DIR/data/bed_reference.json" ]; then
+    echo "  ✓ Referência de cama encontrada"
+else
+    echo "  ! Referência de cama NÃO encontrada (será calibrada no primeiro uso)"
+fi
+
+if [ -f "$PROJECT_DIR/config/environment.json" ]; then
+    echo "  ✓ Configuração de ambiente encontrada"
+else
+    echo "  ! Configuração de ambiente NÃO encontrada"
+fi
 
 echo ""
 echo "=============================================="
-echo "Instalacao concluida!"
+echo "Instalação concluída!"
 echo "=============================================="
 echo ""
-echo "Arquivos instalados em: $INSTALL_DIR"
-echo "Logs em: $LOG_DIR"
-echo "Dados em: $DATA_DIR"
+echo "COMANDOS ÚTEIS:"
 echo ""
-echo "Proximos passos:"
+echo "  Iniciar o serviço:"
+echo "    sudo systemctl start hospital-monitor"
 echo ""
-echo "1. Verifique/edite a configuracao do ambiente:"
-echo "   sudo nano $CONFIG_DIR/environment.json"
+echo "  Parar o serviço:"
+echo "    sudo systemctl stop hospital-monitor"
 echo ""
-echo "2. (Recomendado) Configure o watchdog de hardware:"
-echo "   sudo bash $(dirname "$0")/setup-watchdog.sh"
+echo "  Ver status:"
+echo "    sudo systemctl status hospital-monitor"
 echo ""
-echo "3. Inicie o servico:"
-echo "   sudo systemctl start hospital-monitor"
+echo "  Ver logs em tempo real:"
+echo "    journalctl -u hospital-monitor -f"
 echo ""
-echo "4. Verifique o status:"
-echo "   sudo systemctl status hospital-monitor"
+echo "  Após modificar o código, reinicie:"
+echo "    sudo systemctl restart hospital-monitor"
 echo ""
-echo "5. Veja os logs em tempo real:"
-echo "   tail -f $LOG_DIR/service.log"
+echo "OPCIONAL - Watchdog de hardware (recomendado):"
+echo "    sudo bash $SCRIPT_DIR/setup-watchdog.sh"
 echo ""
-echo "O servico iniciara automaticamente no proximo boot."
+echo "O serviço iniciará automaticamente no próximo boot."

@@ -2,7 +2,6 @@
 Description=Sistema de Monitoramento de Quedas Hospitalares
 
 # Aguarda o ambiente gráfico estar pronto
-# graphical.target = sistema com GUI disponível
 After=graphical.target network.target
 Wants=graphical.target
 
@@ -13,25 +12,26 @@ StartLimitIntervalSec=0
 Type=simple
 User=pi
 Group=pi
-WorkingDirectory=/opt/hospital-monitor
 
-# Comando principal
-ExecStart=/usr/bin/python3 -u /opt/hospital-monitor/main.py
+# =============================================
+# DIRETÓRIO DO CÓDIGO FONTE
+# Altere para o caminho onde está o código
+# =============================================
+WorkingDirectory=/home/pi/mvision
+ExecStart=/usr/bin/python3 -u /home/pi/mvision/main.py
 
 # SEMPRE reinicia, não importa o motivo da falha
 Restart=always
 RestartSec=10
 
 # Logs
-StandardOutput=append:/var/log/hospital-monitor/service.log
-StandardError=append:/var/log/hospital-monitor/service.log
+StandardOutput=journal
+StandardError=journal
 
 # Variáveis de ambiente para GUI funcionar
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
-# Evita problemas com Qt/GTK
-Environment=QT_QPA_PLATFORM=xcb
 
 # Timeout para inicialização (o código aguarda GUI internamente)
 TimeoutStartSec=300
