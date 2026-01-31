@@ -11,8 +11,6 @@ build/
 # Modelos YOLO (baixar separadamente)
 *.pt
 
-# Dados e logs
-data/
 
 # Ambiente virtual
 venv/
