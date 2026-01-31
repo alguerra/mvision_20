@@ -1,0 +1,23 @@
+[Unit]
+Description=MVision Web Configuration Interface
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=tmed
+Group=tmed
+WorkingDirectory=/mvision/web/backend
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+# Resource limits
+MemoryMax=128M
+CPUQuota=30%
+
+[Install]
+WantedBy=multi-user.target
