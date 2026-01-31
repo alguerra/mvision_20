@@ -4,7 +4,7 @@
 # =============================================================================
 #
 # USO:
-#   cd /home/pi/mvision/deploy
+#   cd /mvision/deploy
 #   sudo bash install.sh
 #
 # O QUE FAZ:
@@ -23,11 +23,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Usuário que executa o serviço (dono do diretório do projeto)
+SERVICE_USER="tmed"
+SERVICE_GROUP="tmed"
+
 echo "=============================================="
 echo "Instalação do Sistema de Monitoramento"
 echo "=============================================="
 echo ""
 echo "Diretório do projeto: $PROJECT_DIR"
+echo "Usuário do serviço: $SERVICE_USER"
 echo ""
 
 # Verifica se está rodando como root
@@ -54,8 +59,8 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=pi
-Group=pi
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
 WorkingDirectory=$PROJECT_DIR
 ExecStart=/usr/bin/python3 -u $PROJECT_DIR/main.py
 Restart=always
@@ -64,7 +69,7 @@ StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=XAUTHORITY=/home/$SERVICE_USER/.Xauthority
 TimeoutStartSec=300
 TimeoutStopSec=30
 MemoryMax=512M
@@ -85,13 +90,13 @@ echo "  Serviço habilitado para iniciar no boot"
 
 # 3. Configura permissões
 echo "[3/4] Configurando permissões..."
-chown -R pi:pi "$PROJECT_DIR"
+chown -R $SERVICE_USER:$SERVICE_GROUP "$PROJECT_DIR"
 chmod +x "$PROJECT_DIR/main.py"
 
-# Adiciona usuário pi aos grupos necessários
-usermod -aG gpio pi 2>/dev/null || true
-usermod -aG video pi 2>/dev/null || true
-echo "  Usuário pi adicionado aos grupos gpio e video"
+# Adiciona usuário aos grupos necessários
+usermod -aG gpio $SERVICE_USER 2>/dev/null || true
+usermod -aG video $SERVICE_USER 2>/dev/null || true
+echo "  Usuário $SERVICE_USER adicionado aos grupos gpio e video"
 
 # 4. Verifica arquivos importantes
 echo "[4/4] Verificando configuração..."
