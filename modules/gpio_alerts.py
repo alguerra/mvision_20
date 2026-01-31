@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Optional
 
-from config import GPIO_PIN_ALERT, GPIO_PIN_SYSTEM_READY, GPIO_BLINK_INTERVAL, GPIO_ALERT_DURATION
+from config import GPIO_PIN_ALERT, GPIO_PIN_SYSTEM_READY, GPIO_BLINK_INTERVAL, GPIO_ALERT_DURATION, GPIO_REAL_MODE
 
 # Detecta plataforma
 import platform
@@ -30,15 +30,46 @@ class GPIOAlertManager:
             print("[GPIO] Modo simulado ativo (Windows/nao-Raspberry)")
 
     def _detect_raspberry_pi(self) -> bool:
-        """Detecta se esta rodando no Raspberry Pi."""
+        """
+        Detecta se está rodando no Raspberry Pi.
+
+        A detecção é feita na seguinte ordem:
+        1. Se GPIO_REAL_MODE está configurado em config.py, usa essa configuração
+        2. Caso contrário, auto-detecta usando device tree e /proc/cpuinfo
+
+        Returns:
+            True se deve usar GPIO real (Raspberry Pi detectado ou forçado)
+        """
+        # Override manual via config.py
+        if GPIO_REAL_MODE is not None:
+            reason = f"config GPIO_REAL_MODE={GPIO_REAL_MODE}"
+            print(f"[GPIO] Modo {'real' if GPIO_REAL_MODE else 'simulado'} ({reason})")
+            return GPIO_REAL_MODE
+
         if not IS_LINUX:
             return False
+
+        # Método 1: Device tree (mais confiável para Pi 4, Pi 5, etc)
+        try:
+            with open('/sys/firmware/devicetree/base/model', 'r') as f:
+                model = f.read().lower()
+                if 'raspberry pi' in model:
+                    print(f"[GPIO] Raspberry Pi detectado via device tree: {model.strip()}")
+                    return True
+        except (FileNotFoundError, PermissionError, IOError):
+            pass
+
+        # Método 2: /proc/cpuinfo (fallback para modelos mais antigos)
         try:
             with open('/proc/cpuinfo', 'r') as f:
                 content = f.read()
-                return 'Raspberry' in content or 'BCM' in content
-        except:
-            return False
+                if 'Raspberry' in content or 'BCM' in content:
+                    print("[GPIO] Raspberry Pi detectado via /proc/cpuinfo")
+                    return True
+        except (FileNotFoundError, PermissionError, IOError):
+            pass
+
+        return False
 
     def _setup_gpio(self) -> None:
         """Configura os pinos GPIO no Raspberry Pi."""

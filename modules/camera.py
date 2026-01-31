@@ -6,6 +6,7 @@ Detecta a plataforma (Windows/Linux) e usa o backend apropriado:
 - Linux/Raspberry Pi: Picamera2 + OpenCV para processamento
 """
 
+import os
 import platform
 import sys
 from abc import ABC, abstractmethod
@@ -17,6 +18,59 @@ import numpy as np
 PLATFORM = platform.system()
 IS_WINDOWS = PLATFORM == "Windows"
 IS_LINUX = PLATFORM == "Linux"
+
+
+def is_raspberry_pi() -> bool:
+    """
+    Detecta se está rodando em Raspberry Pi.
+
+    Usa múltiplos métodos para maior confiabilidade:
+    1. Device tree (mais confiável para modelos recentes)
+    2. /proc/cpuinfo (fallback para modelos mais antigos)
+
+    Returns:
+        True se estiver rodando em Raspberry Pi
+    """
+    if not IS_LINUX:
+        return False
+
+    # Método 1: Device tree (mais confiável para Pi 4, Pi 5, etc)
+    try:
+        with open('/sys/firmware/devicetree/base/model', 'r') as f:
+            model = f.read().lower()
+            if 'raspberry pi' in model:
+                return True
+    except (FileNotFoundError, PermissionError, IOError):
+        pass
+
+    # Método 2: /proc/cpuinfo (fallback)
+    try:
+        with open('/proc/cpuinfo', 'r') as f:
+            content = f.read()
+            if 'Raspberry' in content or 'BCM' in content:
+                return True
+    except (FileNotFoundError, PermissionError, IOError):
+        pass
+
+    return False
+
+
+def has_display_available() -> bool:
+    """
+    Verifica se há display disponível no sistema.
+
+    - Windows: sempre retorna True (assume que há display)
+    - Linux: verifica variável DISPLAY
+
+    Returns:
+        True se há display disponível para GUI
+    """
+    if IS_WINDOWS:
+        return True
+
+    # No Linux, verifica variável DISPLAY
+    display = os.environ.get('DISPLAY')
+    return display is not None and display != ''
 
 
 class CameraBase(ABC):
@@ -255,26 +309,39 @@ def create_display(headless: bool = False) -> DisplayBase:
     """
     Cria instancia de display apropriada para a plataforma.
 
+    A detecção é feita na seguinte ordem:
+    1. Se headless=True foi passado explicitamente, usa modo headless
+    2. Se DISPLAY_GUI_MODE está configurado em config.py, usa essa configuração
+    3. Caso contrário, auto-detecta baseado na disponibilidade de display
+
     Args:
-        headless: Se True, usa display headless (sem GUI)
+        headless: Se True, força display headless (sem GUI)
 
     Returns:
         Instancia de DisplayBase
     """
-    if headless:
-        print(f"[Display] Modo headless ativado")
-        return DisplayHeadless()
+    from config import DISPLAY_GUI_MODE
 
-    if IS_WINDOWS:
-        print(f"[Display] Plataforma Windows - usando OpenCV GUI")
-        return DisplayOpenCV()
-    elif IS_LINUX:
-        # No Linux/Raspberry, assume headless por padrao
-        # Pode ser alterado se houver display conectado
-        print(f"[Display] Plataforma Linux - modo headless")
-        return DisplayHeadless()
+    # Determina se deve usar GUI ou headless
+    if headless:
+        # Parâmetro explícito tem prioridade
+        use_gui = False
+        reason = "parametro headless=True"
+    elif DISPLAY_GUI_MODE is not None:
+        # Override manual via config.py
+        use_gui = DISPLAY_GUI_MODE
+        reason = f"config DISPLAY_GUI_MODE={DISPLAY_GUI_MODE}"
     else:
+        # Auto-detecção
+        use_gui = has_display_available()
+        reason = f"auto-detectado (DISPLAY={'presente' if use_gui else 'ausente'})"
+
+    if use_gui:
+        print(f"[Display] Modo GUI ativado ({reason})")
         return DisplayOpenCV()
+    else:
+        print(f"[Display] Modo headless ativado ({reason})")
+        return DisplayHeadless()
 
 
 def get_platform_info() -> dict:
@@ -288,5 +355,7 @@ def get_platform_info() -> dict:
         "system": PLATFORM,
         "is_windows": IS_WINDOWS,
         "is_linux": IS_LINUX,
+        "is_raspberry_pi": is_raspberry_pi(),
+        "has_display": has_display_available(),
         "python_version": sys.version,
     }

@@ -14,7 +14,7 @@ import numpy as np
 
 from config import DASHBOARD_WIDTH, WINDOW_NAME, POSE_CONFIDENCE_HIGH
 from modules.state_machine import PatientState, PatientPoseState, StateMachine
-from modules.camera import DisplayBase, create_display, IS_WINDOWS, IS_LINUX
+from modules.camera import DisplayBase, DisplayOpenCV, create_display, IS_WINDOWS, IS_LINUX
 
 
 class DisplayManager:
@@ -38,15 +38,16 @@ class DisplayManager:
 
         Args:
             window_name: Nome da janela. Default: config.WINDOW_NAME
-            headless: Se True, usa modo headless (sem GUI)
+            headless: Se True, força modo headless (sem GUI)
         """
         self.window_name = window_name or WINDOW_NAME
         self.dashboard_width = DASHBOARD_WIDTH
 
         # Cria backend de display apropriado para a plataforma
-        # No Linux, assume headless por padrao
-        self.headless = headless or IS_LINUX
-        self._display: DisplayBase = create_display(headless=self.headless)
+        # A detecção inteligente é feita dentro de create_display()
+        # que considera: parâmetro headless, config.DISPLAY_GUI_MODE e auto-detecção
+        self._display: DisplayBase = create_display(headless=headless)
+        self.headless = not isinstance(self._display, DisplayOpenCV)
 
     def draw_bed_polygon(
         self,
