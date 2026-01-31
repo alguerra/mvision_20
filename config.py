@@ -100,13 +100,14 @@ ENVIRONMENT_CONFIG_PATH = "config/environment.json"
 ENVIRONMENT_DEFAULT_ID = "NAO-CONFIGURADO"
 
 # =============================================================================
-# Platform Detection Configuration
+# Platform Configuration
 # =============================================================================
-# Modo de exibição (None = auto-detectar, True = forçar GUI, False = forçar headless)
-DISPLAY_GUI_MODE = None
-
 # Modo GPIO (None = auto-detectar, True = forçar real, False = forçar simulado)
 GPIO_REAL_MODE = None
+
+# Tempo máximo para aguardar GUI estar disponível no boot (segundos)
+# O serviço systemd pode iniciar antes do X11/Wayland estar pronto
+DISPLAY_WAIT_TIMEOUT = 120
 
 # =============================================================================
 # GPIO Configuration (Raspberry Pi only)

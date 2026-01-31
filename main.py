@@ -21,11 +21,22 @@ import os
 import sys
 import time
 import traceback
+import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+
+# Suprime warnings do OpenCV e ultralytics sobre fonts
+warnings.filterwarnings("ignore", message=".*font.*", category=UserWarning)
+
+# No Linux sem DISPLAY, configura Qt para modo offscreen
+# Isso evita erros de GUI quando nao ha monitor conectado
+import platform
+if platform.system() == "Linux" and not os.environ.get("DISPLAY"):
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 from ultralytics import YOLO
 
 from config import (
@@ -37,6 +48,7 @@ from config import (
     CAMERA_INDEX,
     DEV_MODE,
     DEV_SKIP_BED_DETECTION,
+    DISPLAY_WAIT_TIMEOUT,
     FLIP_HORIZONTAL,
     FRAME_DELAY_SECONDS,
     POSE_CONFIDENCE_HIGH,
@@ -50,7 +62,7 @@ from config import (
 from gui.display import DisplayManager
 from modules.alert_logger import AlertLogger
 from modules.bed_detector import BedDetector
-from modules.camera import CameraBase, create_camera, get_platform_info, IS_LINUX
+from modules.camera import CameraBase, create_camera, get_platform_info, IS_LINUX, wait_for_display
 from modules.environment import get_environment_id
 from modules.gpio_alerts import GPIOAlertManager
 from modules.patient_monitor import PatientMonitor
@@ -67,12 +79,12 @@ HEARTBEAT_FILE = "/tmp/hospital-monitor-heartbeat"
 HEARTBEAT_INTERVAL = 30  # Segundos entre heartbeats
 
 # Tentativas de reinicializacao
-MAX_INIT_RETRIES = 5
-INIT_RETRY_DELAY = 10  # Segundos entre tentativas
+MAX_INIT_RETRIES = 10  # Aumentado para maior resiliencia no Raspberry Pi
+INIT_RETRY_DELAY = 5   # Segundos entre tentativas (reduzido para recuperar mais rapido)
 
 # Tentativas de recuperacao de erro no loop principal
-MAX_CONSECUTIVE_ERRORS = 10
-ERROR_RECOVERY_DELAY = 2  # Segundos para aguardar antes de tentar novamente
+MAX_CONSECUTIVE_ERRORS = 30  # Aumentado para dar mais tempo de recuperacao
+ERROR_RECOVERY_DELAY = 1  # Segundos para aguardar antes de tentar novamente
 
 # Configura logging de erros
 logging.basicConfig(
@@ -134,10 +146,9 @@ def safe_cleanup(camera: Optional[CameraBase], display: Optional[DisplayManager]
     except Exception:
         pass
 
-    try:
-        cv2.destroyAllWindows()
-    except Exception:
-        pass
+    # cv2.destroyAllWindows() so eh necessario no modo GUI
+    # e ja eh chamado pelo display.close() - evita duplicacao
+    # que pode causar problemas no modo headless
 
     try:
         if gpio_manager is not None:
@@ -235,6 +246,11 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
     Raises:
         Exception: Se falhar ao inicializar algum componente
     """
+    # No Linux, aguarda GUI estar disponível (serviço pode iniciar antes do X11)
+    if IS_LINUX:
+        if not wait_for_display(timeout_seconds=DISPLAY_WAIT_TIMEOUT, check_interval=5):
+            raise RuntimeError("GUI não disponível - verifique se o display está conectado")
+
     # Carrega identificacao do ambiente
     environment_id = get_environment_id()
     platform_info = get_platform_info()
@@ -355,10 +371,11 @@ def run_monitoring_loop(
             ret, frame = camera.read()
             if not ret or frame is None:
                 consecutive_errors += 1
-                logger.warning(f"Falha ao capturar frame ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS})")
+                if consecutive_errors <= 5 or consecutive_errors % 10 == 0:
+                    logger.warning(f"Falha ao capturar frame ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS})")
 
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    logger.error("Muitos erros consecutivos de captura - reiniciando")
+                    logger.error("Muitos erros consecutivos de captura - tentando reiniciar sistema")
                     return False
 
                 time.sleep(ERROR_RECOVERY_DELAY)
@@ -410,30 +427,6 @@ def run_monitoring_loop(
             pose_state = pose_fsm.update(analysis, body_points, person_count)
             pose_state_enum = PatientPoseState(pose_state)
 
-            # Detecta mudanca de estado e loga alertas
-            if pose_state != previous_pose_state:
-                image_path = alert_logger.log_state_change(
-                    previous_state=previous_pose_state,
-                    new_state=pose_state,
-                    frame=frame,
-                )
-                if image_path:
-                    last_alert_image = image_path
-                    alert_feedback_until = time.time() + 3.0
-                    print(f"[ALERTA] {pose_state} - Imagem salva: {image_path}")
-                elif pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
-                    print(f"[ALERTA] {pose_state}")
-
-                # Controle de alerta GPIO
-                if pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
-                    gpio_manager.start_risk_alert()
-                elif pose_state == PoseStateMachineEMA.MONITORANDO:
-                    # So para o alerta se paciente VOLTOU para a cama
-                    # Se foi para AGUARDANDO (desapareceu), deixa o alerta completar o ciclo
-                    gpio_manager.stop_risk_alert()
-
-                previous_pose_state = pose_state
-
             # Atualiza monitor
             monitor.update(person_count)
 
@@ -461,6 +454,31 @@ def run_monitoring_loop(
             ema_scores = pose_fsm.get_scores()
             frame = display.draw_ema_scores(frame, ema_scores)
 
+            # Detecta mudanca de estado e loga alertas
+            if pose_state != previous_pose_state:
+                image_path = alert_logger.log_state_change(
+                    previous_state=previous_pose_state,
+                    new_state=pose_state,
+                    frame=frame,  # Frame ja tem anotacoes
+                )
+                if image_path:
+                    last_alert_image = image_path
+                    alert_feedback_until = time.time() + 3.0
+                    print(f"[ALERTA] {pose_state} - Imagem salva: {image_path}")
+                elif pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
+                    print(f"[ALERTA] {pose_state}")
+
+                # Controle de alerta GPIO
+                if pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
+                    gpio_manager.start_risk_alert()
+                elif pose_state == PoseStateMachineEMA.MONITORANDO:
+                    # So para o alerta se paciente VOLTOU para a cama
+                    # Se foi para AGUARDANDO (desapareceu), deixa o alerta completar o ciclo
+                    gpio_manager.stop_risk_alert()
+
+                previous_pose_state = pose_state
+
+            # Feedback visual de alerta salvo
             if time.time() < alert_feedback_until and last_alert_image:
                 frame = display.draw_log_feedback(
                     frame,
@@ -468,6 +486,7 @@ def run_monitoring_loop(
                     alert_logger.get_image_count(),
                 )
 
+            # Renderiza frame no display
             key = display.render(frame)
 
             # Captura de teclas
@@ -621,10 +640,12 @@ def main():
 
             if user_requested_exit:
                 logger.info("Encerramento normal solicitado pelo usuario")
+                print("\n[SISTEMA] Encerramento solicitado pelo usuario")
                 break
             else:
                 # Erro no loop - tenta reiniciar
                 logger.warning("Reiniciando sistema apos erro...")
+                print("\n[SISTEMA] Reiniciando sistema apos erros de captura...")
                 time.sleep(ERROR_RECOVERY_DELAY)
 
         except KeyboardInterrupt:

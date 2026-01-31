@@ -1,6 +1,8 @@
 [Unit]
 Description=Sistema de Monitoramento de Quedas Hospitalares
-After=network.target
+# Aguarda a sessão gráfica estar pronta (importante para cv2.imshow)
+After=graphical-session.target network.target
+Wants=graphical-session.target
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -15,14 +17,20 @@ StandardOutput=append:/var/log/hospital-monitor/service.log
 StandardError=append:/var/log/hospital-monitor/service.log
 
 # Watchdog do systemd (service deve enviar heartbeat)
-WatchdogSec=60
+WatchdogSec=120
 
-# Variaveis de ambiente
+# Variaveis de ambiente para GUI
 Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+
+# Timeout maior para aguardar GUI inicializar
+TimeoutStartSec=180
 
 # Limites de recursos
 MemoryMax=512M
 CPUQuota=80%
 
 [Install]
-WantedBy=multi-user.target
+# Usar graphical-session.target para garantir que GUI está pronta
+WantedBy=graphical-session.target

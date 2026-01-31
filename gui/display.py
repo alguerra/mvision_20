@@ -38,16 +38,18 @@ class DisplayManager:
 
         Args:
             window_name: Nome da janela. Default: config.WINDOW_NAME
-            headless: Se True, força modo headless (sem GUI)
+            headless: Se True, força modo headless (sem GUI) - não recomendado
         """
         self.window_name = window_name or WINDOW_NAME
         self.dashboard_width = DASHBOARD_WIDTH
 
-        # Cria backend de display apropriado para a plataforma
-        # A detecção inteligente é feita dentro de create_display()
-        # que considera: parâmetro headless, config.DISPLAY_GUI_MODE e auto-detecção
+        # Cria backend de display - sempre GUI no uso normal
+        # O sistema aguarda a GUI estar disponível antes de chegar aqui
         self._display: DisplayBase = create_display(headless=headless)
         self.headless = not isinstance(self._display, DisplayOpenCV)
+
+        # Sempre renderiza no modo normal (GUI)
+        self.skip_rendering = False
 
     def draw_bed_polygon(
         self,
@@ -994,6 +996,9 @@ class DisplayManager:
         """
         Exibe frame na janela e retorna tecla pressionada.
 
+        No modo headless, apenas aguarda um pequeno delay e retorna -1.
+        Isso evita consumo excessivo de CPU.
+
         Args:
             frame: Frame final para exibição.
 
@@ -1002,6 +1007,19 @@ class DisplayManager:
         """
         self._display.show(self.window_name, frame)
         return self._display.wait_key(1)
+
+    def should_draw(self) -> bool:
+        """
+        Verifica se deve realizar operações de desenho.
+
+        No modo headless, retorna False para economizar CPU.
+        Útil para pular operações de desenho complexas que não são
+        necessárias quando não há display.
+
+        Returns:
+            True se deve desenhar, False se pode pular.
+        """
+        return not self.skip_rendering
 
     def close(self) -> None:
         """Fecha a janela de exibição."""

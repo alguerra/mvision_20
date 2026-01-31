@@ -73,6 +73,55 @@ def has_display_available() -> bool:
     return display is not None and display != ''
 
 
+def wait_for_display(timeout_seconds: int = 120, check_interval: int = 5) -> bool:
+    """
+    Aguarda até que o display (GUI) esteja disponível.
+
+    Útil quando o serviço systemd inicia antes do X11/Wayland estar pronto.
+    No Windows, retorna imediatamente.
+
+    Args:
+        timeout_seconds: Tempo máximo de espera em segundos (default: 120)
+        check_interval: Intervalo entre verificações em segundos (default: 5)
+
+    Returns:
+        True se o display ficou disponível, False se timeout
+    """
+    import time
+
+    if IS_WINDOWS:
+        return True
+
+    print(f"[Display] Aguardando GUI estar disponível (timeout: {timeout_seconds}s)...")
+
+    elapsed = 0
+    while elapsed < timeout_seconds:
+        # Verifica variável DISPLAY
+        if has_display_available():
+            # Tenta verificar se o X11 está realmente funcional
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['xset', 'q'],
+                    capture_output=True,
+                    timeout=5,
+                    env=os.environ
+                )
+                if result.returncode == 0:
+                    print(f"[Display] GUI disponível após {elapsed}s")
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+                pass
+
+        time.sleep(check_interval)
+        elapsed += check_interval
+        if elapsed % 30 == 0:
+            print(f"[Display] Ainda aguardando GUI... ({elapsed}s)")
+
+    print(f"[Display] TIMEOUT: GUI não disponível após {timeout_seconds}s")
+    return False
+
+
 class CameraBase(ABC):
     """Interface abstrata para camera."""
 
@@ -168,11 +217,14 @@ class CameraPicamera(CameraBase):
         self.width = 640
         self.height = 480
         self._is_open = False
+        self._consecutive_errors = 0
+        self._max_errors_before_restart = 5
 
     def open(self) -> bool:
         try:
             from picamera2 import Picamera2
 
+            print("[Camera] Inicializando Picamera2...")
             self.picam2 = Picamera2()
             config = self.picam2.create_preview_configuration(
                 main={"size": (self.width, self.height), "format": "RGB888"}
@@ -180,6 +232,8 @@ class CameraPicamera(CameraBase):
             self.picam2.configure(config)
             self.picam2.start()
             self._is_open = True
+            self._consecutive_errors = 0
+            print("[Camera] Picamera2 inicializada com sucesso")
             return True
         except Exception as e:
             print(f"[Camera] Erro ao inicializar Picamera2: {e}")
@@ -194,17 +248,63 @@ class CameraPicamera(CameraBase):
             import cv2
             frame = self.picam2.capture_array()
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            self._consecutive_errors = 0  # Reset em sucesso
             return True, frame
-        except Exception:
+        except Exception as e:
+            self._consecutive_errors += 1
+            if self._consecutive_errors <= 3:
+                print(f"[Camera] Erro ao capturar frame: {e}")
+
+            # Tenta reiniciar a camera se muitos erros
+            if self._consecutive_errors >= self._max_errors_before_restart:
+                print("[Camera] Muitos erros consecutivos, tentando reiniciar...")
+                self._restart_camera()
+
             return False, None
 
+    def _restart_camera(self) -> None:
+        """Tenta reiniciar a camera apos erros."""
+        try:
+            if self.picam2 is not None:
+                try:
+                    self.picam2.stop()
+                except Exception:
+                    pass
+                try:
+                    self.picam2.close()
+                except Exception:
+                    pass
+
+            import time
+            time.sleep(1)  # Aguarda antes de reiniciar
+
+            from picamera2 import Picamera2
+            self.picam2 = Picamera2()
+            config = self.picam2.create_preview_configuration(
+                main={"size": (self.width, self.height), "format": "RGB888"}
+            )
+            self.picam2.configure(config)
+            self.picam2.start()
+            self._is_open = True
+            self._consecutive_errors = 0
+            print("[Camera] Picamera2 reiniciada com sucesso")
+        except Exception as e:
+            print(f"[Camera] Falha ao reiniciar camera: {e}")
+            self._is_open = False
+
     def release(self) -> None:
+        print("[Camera] Liberando recursos da Picamera2...")
         if self.picam2 is not None:
             try:
                 self.picam2.stop()
+                print("[Camera] Picamera2 parada")
+            except Exception as e:
+                print(f"[Camera] Erro ao parar: {e}")
+            try:
                 self.picam2.close()
-            except Exception:
-                pass
+                print("[Camera] Picamera2 fechada")
+            except Exception as e:
+                print(f"[Camera] Erro ao fechar: {e}")
             self.picam2 = None
         self._is_open = False
 
@@ -216,6 +316,7 @@ class CameraPicamera(CameraBase):
         self.height = height
         # Se ja estiver aberta, precisa reconfigurar
         if self._is_open and self.picam2 is not None:
+            print(f"[Camera] Alterando resolucao para {width}x{height}...")
             self.picam2.stop()
             config = self.picam2.create_preview_configuration(
                 main={"size": (width, height), "format": "RGB888"}
@@ -307,41 +408,23 @@ def create_camera(camera_index: int = 0) -> CameraBase:
 
 def create_display(headless: bool = False) -> DisplayBase:
     """
-    Cria instancia de display apropriada para a plataforma.
+    Cria instancia de display para exibição com OpenCV.
 
-    A detecção é feita na seguinte ordem:
-    1. Se headless=True foi passado explicitamente, usa modo headless
-    2. Se DISPLAY_GUI_MODE está configurado em config.py, usa essa configuração
-    3. Caso contrário, auto-detecta baseado na disponibilidade de display
+    O sistema aguarda a GUI estar disponível (via wait_for_display)
+    antes de chamar esta função, então sempre usa modo GUI.
 
     Args:
-        headless: Se True, força display headless (sem GUI)
+        headless: Se True, força display headless (não recomendado)
 
     Returns:
         Instancia de DisplayBase
     """
-    from config import DISPLAY_GUI_MODE
-
-    # Determina se deve usar GUI ou headless
     if headless:
-        # Parâmetro explícito tem prioridade
-        use_gui = False
-        reason = "parametro headless=True"
-    elif DISPLAY_GUI_MODE is not None:
-        # Override manual via config.py
-        use_gui = DISPLAY_GUI_MODE
-        reason = f"config DISPLAY_GUI_MODE={DISPLAY_GUI_MODE}"
-    else:
-        # Auto-detecção
-        use_gui = has_display_available()
-        reason = f"auto-detectado (DISPLAY={'presente' if use_gui else 'ausente'})"
-
-    if use_gui:
-        print(f"[Display] Modo GUI ativado ({reason})")
-        return DisplayOpenCV()
-    else:
-        print(f"[Display] Modo headless ativado ({reason})")
+        print("[Display] Modo headless (sem GUI)")
         return DisplayHeadless()
+
+    print("[Display] Modo GUI com OpenCV")
+    return DisplayOpenCV()
 
 
 def get_platform_info() -> dict:
