@@ -1,0 +1,180 @@
+================================================================================
+                  GUIA DE TROUBLESHOOTING - MVISION MONITOR
+================================================================================
+
+Este documento descreve como diagnosticar e resolver problemas comuns do sistema
+MVision Monitor no Raspberry Pi.
+
+================================================================================
+PROBLEMA 1: SISTEMA REINICIANDO SOZINHO
+================================================================================
+
+ARQUITETURA DE WATCHDOG (4 CAMADAS DE PROTEÇÃO)
+-----------------------------------------------
+| Camada            | Timeout | Condição              | Ação            |
+|-------------------|---------|----------------------|-----------------|
+| Hardware Watchdog | 15s     | Sistema travado      | Reboot hardware |
+| Watchdog Daemon   | 90s     | Heartbeat ausente    | Reboot          |
+| Carga do Sistema  | -       | Load > 24            | Reboot          |
+| Memória           | -       | < 1 página livre     | Reboot          |
+| Systemd           | -       | RAM > 512MB          | Mata processo   |
+| Aplicação         | -       | 30 erros consecutivos| Reinicia app    |
+
+
+COMANDOS DE DIAGNÓSTICO
+-----------------------
+
+# Ver logs do watchdog
+sudo cat /var/log/watchdog
+
+# Ver logs do serviço de monitoramento
+sudo journalctl -u hospital-monitor --since "1 hour ago" --no-pager
+
+# Ver uso de memória do processo
+ps aux | grep python
+
+# Ver carga do sistema
+uptime
+
+# Ver memória disponível
+free -h
+
+# Ver histórico de reboots
+last reboot
+
+# Ver mensagens do kernel (OOM killer, etc)
+dmesg | tail -100
+
+
+ARQUIVOS CRÍTICOS
+-----------------
+/var/log/watchdog                    - Logs do watchdog daemon
+/tmp/hospital-monitor-heartbeat      - Heartbeat (atualiza a cada 30s)
+/etc/watchdog.conf                   - Configuração do watchdog
+/etc/systemd/system/hospital-monitor.service - Serviço principal
+
+
+CAUSAS PROVÁVEIS
+----------------
+1. Excesso de processamento (YOLOv8) - CPU/memória alta
+2. Heartbeat não sendo enviado - Calibração ou loop travando
+3. Memória estourando - Limite de 512MB ultrapassado
+4. Câmera falhando - 30 erros consecutivos
+
+
+SOLUÇÕES
+--------
+# Reiniciar o serviço
+sudo systemctl restart hospital-monitor
+
+# Atualizar heartbeat manualmente (ganha 90s)
+echo "$(date +%s)" > /tmp/hospital-monitor-heartbeat
+
+# Limpar memória
+sudo sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches'
+
+# Desabilitar watchdog temporariamente (use com cuidado!)
+sudo systemctl stop watchdog
+
+
+================================================================================
+PROBLEMA 2: INTERFACE WEB NÃO ACESSÍVEL
+================================================================================
+
+INFORMAÇÕES DE ACESSO
+---------------------
+Porta:         8080
+URL:           http://<IP-DO-RASPBERRY>:8080
+Senha padrão:  mvision123
+Serviço:       mvision-web.service
+
+
+COMANDOS DE DIAGNÓSTICO
+-----------------------
+
+# Verificar status do serviço
+sudo systemctl status mvision-web
+
+# Ver logs do serviço web
+sudo journalctl -u mvision-web --no-pager -n 50
+
+# Verificar se a porta está aberta
+sudo ss -tlnp | grep 8080
+
+# Descobrir IP do Raspberry
+hostname -I
+
+# Testar acesso local
+curl http://localhost:8080
+
+
+CAUSAS PROVÁVEIS
+----------------
+1. Serviço não iniciado - mvision-web.service inativo
+2. Porta bloqueada - Firewall ou outra app usando a porta
+3. Dependências faltando - FastAPI/Uvicorn não instalados
+4. Erro no código - Problema na inicialização do servidor
+
+
+SOLUÇÕES
+--------
+# Reiniciar serviço
+sudo systemctl restart mvision-web
+
+# Verificar dependências
+pip3 list | grep -E 'fastapi|uvicorn'
+
+# Instalar dependências se faltando
+pip3 install fastapi uvicorn jinja2
+
+# Ver logs em tempo real
+sudo journalctl -u mvision-web -f
+
+
+================================================================================
+SCRIPTS DE DIAGNÓSTICO DISPONÍVEIS
+================================================================================
+
+1. diagnostico.sh  - Coleta todas as informações de diagnóstico
+   Uso: sudo bash diagnostico.sh
+
+2. correcoes.sh    - Menu interativo com correções automáticas
+   Uso: sudo bash correcoes.sh
+
+
+================================================================================
+COMANDOS RÁPIDOS DE REFERÊNCIA
+================================================================================
+
+# Status de todos os serviços MVision
+systemctl list-units --type=service | grep -E 'mvision|hospital|monitor'
+
+# Reiniciar tudo
+sudo systemctl restart hospital-monitor mvision-web
+
+# Ver todos os logs em tempo real
+sudo journalctl -u hospital-monitor -u mvision-web -f
+
+# Verificar portas em uso
+sudo ss -tlnp
+
+# Verificar processos Python
+ps aux | grep -E 'python|uvicorn'
+
+# Espaço em disco
+df -h
+
+# Temperatura do Raspberry
+vcgencmd measure_temp 2>/dev/null || cat /sys/class/thermal/thermal_zone0/temp
+
+
+================================================================================
+CONTATO E SUPORTE
+================================================================================
+
+Em caso de problemas persistentes:
+1. Execute: sudo bash diagnostico.sh
+2. Colete o relatório gerado em /tmp/diagnostico_mvision_*.txt
+3. Envie o relatório para análise
+
+================================================================================
