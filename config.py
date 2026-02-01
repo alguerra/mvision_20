@@ -105,14 +105,10 @@ ENVIRONMENT_DEFAULT_ID = "NAO-CONFIGURADO"
 # Modo GPIO (None = auto-detectar, True = forçar real, False = forçar simulado)
 GPIO_REAL_MODE = None
 
-# Tempo máximo para aguardar GUI estar disponível no boot (segundos)
-# O serviço systemd pode iniciar antes do X11/Wayland estar pronto
+# Tempo máximo para aguardar X11 estar disponível no boot (segundos)
+# O serviço systemd pode iniciar antes do desktop estar pronto
+# O sistema continua mesmo sem monitor físico conectado
 DISPLAY_WAIT_TIMEOUT = 120
-
-# Modo headless (sem monitor)
-# Quando True, o sistema roda sem exibir janela de vídeo
-# Útil para produção onde não há monitor conectado
-HEADLESS_MODE = False
 
 # =============================================================================
 # GPIO Configuration (Raspberry Pi only)
