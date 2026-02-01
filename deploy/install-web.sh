@@ -39,7 +39,7 @@ if [ ! -f "$MVISION_DIR/web/backend/main.py" ]; then
 fi
 
 echo -e "${YELLOW}[1/5] Instalando dependencias Python...${NC}"
-pip3 install --quiet fastapi uvicorn python-multipart pydantic || {
+pip3 install --quiet --ignore-installed --break-system-packages fastapi uvicorn python-multipart pydantic || {
     echo -e "${RED}Falha ao instalar dependencias Python${NC}"
     exit 1
 }
