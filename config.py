@@ -109,6 +109,11 @@ GPIO_REAL_MODE = None
 # O serviço systemd pode iniciar antes do X11/Wayland estar pronto
 DISPLAY_WAIT_TIMEOUT = 120
 
+# Modo headless (sem monitor)
+# Quando True, o sistema roda sem exibir janela de vídeo
+# Útil para produção onde não há monitor conectado
+HEADLESS_MODE = False
+
 # =============================================================================
 # GPIO Configuration (Raspberry Pi only)
 # =============================================================================

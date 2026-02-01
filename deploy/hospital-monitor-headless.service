@@ -1,7 +1,7 @@
 [Unit]
-Description=Sistema de Monitoramento de Quedas Hospitalares MVision
-After=graphical.target network.target
-Wants=graphical.target
+Description=Sistema de Monitoramento de Quedas Hospitalares MVision (Headless)
+After=network.target
+Wants=network.target
 
 # Remove limite de reinicializações - SEMPRE reinicia
 StartLimitIntervalSec=0
@@ -23,10 +23,9 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
-# Variáveis de ambiente
+# Variáveis de ambiente (sem DISPLAY para modo headless)
 Environment=PYTHONUNBUFFERED=1
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/tmed/.Xauthority
+Environment=QT_QPA_PLATFORM=offscreen
 
 # Timeout generoso para inicialização (YOLO demora para carregar)
 TimeoutStartSec=300
@@ -40,4 +39,4 @@ CPUQuota=90%
 SupplementaryGroups=gpio video
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

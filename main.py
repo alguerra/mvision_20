@@ -51,6 +51,7 @@ from config import (
     DISPLAY_WAIT_TIMEOUT,
     FLIP_HORIZONTAL,
     FRAME_DELAY_SECONDS,
+    HEADLESS_MODE,
     POSE_CONFIDENCE_HIGH,
     POSE_CONFIDENCE_MIN,
     POSE_FRAMES_PATIENT_DETECTED,
@@ -247,9 +248,13 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
         Exception: Se falhar ao inicializar algum componente
     """
     # No Linux, aguarda GUI estar disponível (serviço pode iniciar antes do X11)
-    if IS_LINUX:
+    # Em modo headless, pula esta verificação
+    if IS_LINUX and not HEADLESS_MODE:
         if not wait_for_display(timeout_seconds=DISPLAY_WAIT_TIMEOUT, check_interval=5):
             raise RuntimeError("GUI não disponível - verifique se o display está conectado")
+
+    if HEADLESS_MODE:
+        print("[Headless] Modo sem monitor ativo - janela de vídeo desabilitada")
 
     # Carrega identificacao do ambiente
     environment_id = get_environment_id()
@@ -285,7 +290,7 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
     # 3. Inicializa modulos
     print("\n[3/4] Inicializando modulos...")
     bed_detector = BedDetector(yolo)
-    display = DisplayManager(WINDOW_NAME)
+    display = DisplayManager(WINDOW_NAME, headless=HEADLESS_MODE)
     alert_logger = AlertLogger()
 
     print("    Modulos inicializados")
