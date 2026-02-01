@@ -1,24 +1,19 @@
 [Unit]
-Description=Sistema de Monitoramento de Quedas Hospitalares
+Description=Sistema de Monitoramento de Quedas Hospitalares MVision
+After=network.target
+Wants=network.target
 
-# Aguarda o ambiente gráfico estar pronto
-After=graphical.target network.target
-Wants=graphical.target
-
-# Desabilita limite de reinicializações - SEMPRE reinicia
+# Remove limite de reinicializações - SEMPRE reinicia
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=pi
-Group=pi
+User=tmed
+Group=tmed
 
-# =============================================
-# DIRETÓRIO DO CÓDIGO FONTE
-# Altere para o caminho onde está o código
-# =============================================
-WorkingDirectory=/home/pi/mvision
-ExecStart=/usr/bin/python3 -u /home/pi/mvision/main.py
+# Diretório do código
+WorkingDirectory=/mvision
+ExecStart=/usr/bin/python3 -u /mvision/main.py
 
 # SEMPRE reinicia, não importa o motivo da falha
 Restart=always
@@ -28,22 +23,20 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
-# Variáveis de ambiente para GUI funcionar
+# Variáveis de ambiente
 Environment=PYTHONUNBUFFERED=1
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/pi/.Xauthority
 
-# Timeout para inicialização (o código aguarda GUI internamente)
+# Timeout generoso para inicialização (YOLO demora para carregar)
 TimeoutStartSec=300
 TimeoutStopSec=30
 
-# Limites de recursos (previne consumo excessivo)
-MemoryMax=512M
-CPUQuota=80%
+# Limites de recursos RELAXADOS (YOLO precisa de memória)
+# 768MB é mais seguro para YOLOv8
+MemoryMax=768M
+CPUQuota=90%
 
 # Permite acesso a GPIO e câmera
 SupplementaryGroups=gpio video
 
 [Install]
-# Inicia junto com o modo gráfico
-WantedBy=graphical.target
+WantedBy=multi-user.target

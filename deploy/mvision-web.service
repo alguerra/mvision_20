@@ -3,21 +3,30 @@ Description=MVision Web Configuration Interface
 After=network.target
 Wants=network.target
 
+# Remove limite de reinicializações
+StartLimitIntervalSec=0
+
 [Service]
 Type=simple
 User=tmed
 Group=tmed
+
 WorkingDirectory=/mvision/web/backend
 ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8080
+
+# SEMPRE reinicia
 Restart=always
 RestartSec=5
+
+# Logs
 StandardOutput=journal
 StandardError=journal
+
 Environment=PYTHONUNBUFFERED=1
 
-# Resource limits
+# Limites de recursos (web é leve)
 MemoryMax=128M
-CPUQuota=30%
+CPUQuota=20%
 
 [Install]
 WantedBy=multi-user.target
