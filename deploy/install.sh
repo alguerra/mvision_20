@@ -72,8 +72,8 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/$SERVICE_USER/.Xauthority
 TimeoutStartSec=300
 TimeoutStopSec=30
-MemoryMax=512M
-CPUQuota=80%
+MemoryMax=768M
+CPUQuota=90%
 SupplementaryGroups=gpio video
 
 [Install]
@@ -134,7 +134,7 @@ echo ""
 echo "  Após modificar o código, reinicie:"
 echo "    sudo systemctl restart hospital-monitor"
 echo ""
-echo "OPCIONAL - Watchdog de hardware (recomendado):"
-echo "    sudo bash $SCRIPT_DIR/setup-watchdog.sh"
+echo "OPCIONAL - Configurar display virtual (para funcionar sem monitor):"
+echo "    sudo bash $SCRIPT_DIR/setup-display.sh"
 echo ""
 echo "O serviço iniciará automaticamente no próximo boot."
