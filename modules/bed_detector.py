@@ -61,9 +61,81 @@ class BedDetector:
 
         return indices
 
+    def _calculate_bed_score(
+        self,
+        bbox: np.ndarray,
+        frame_height: int,
+        frame_width: int,
+        confidence: float,
+    ) -> float:
+        """
+        Calcula score para selecionar a cama principal no campo de visão.
+
+        Prioriza camas que estão:
+        - Mais centralizadas no frame
+        - Ocupam maior área (mais visíveis)
+        - Não estão cortadas nas bordas
+
+        Args:
+            bbox: Coordenadas (x1, y1, x2, y2) da detecção.
+            frame_height: Altura do frame.
+            frame_width: Largura do frame.
+            confidence: Score de confiança do YOLO.
+
+        Returns:
+            Score combinado (maior = melhor candidata).
+        """
+        x1, y1, x2, y2 = bbox
+
+        # 1. Score de área - camas mais visíveis ocupam mais espaço
+        bed_area = (x2 - x1) * (y2 - y1)
+        frame_area = frame_width * frame_height
+        area_score = bed_area / frame_area  # Normalizado 0-1
+
+        # 2. Score de centralização - camas no centro do campo de visão
+        bed_center_x = (x1 + x2) / 2
+        bed_center_y = (y1 + y2) / 2
+        frame_center_x = frame_width / 2
+        frame_center_y = frame_height / 2
+
+        # Distância normalizada do centro (0 = centro perfeito, 1 = canto)
+        dist_x = abs(bed_center_x - frame_center_x) / (frame_width / 2)
+        dist_y = abs(bed_center_y - frame_center_y) / (frame_height / 2)
+        center_distance = (dist_x + dist_y) / 2
+        center_score = 1 - center_distance  # Invertido: mais perto do centro = maior score
+
+        # 3. Penalidade para camas cortadas nas bordas
+        edge_margin = 5  # pixels de margem para considerar "na borda"
+        edge_penalty = 0.0
+
+        if x1 <= edge_margin:  # Cortada na esquerda
+            edge_penalty += 0.3
+        if y1 <= edge_margin:  # Cortada em cima
+            edge_penalty += 0.3
+        if x2 >= frame_width - edge_margin:  # Cortada na direita
+            edge_penalty += 0.3
+        if y2 >= frame_height - edge_margin:  # Cortada embaixo
+            edge_penalty += 0.3
+
+        # Score final: combinação ponderada
+        # - Área tem peso maior (cama principal geralmente é a maior e mais visível)
+        # - Centralização ajuda a desempatar
+        # - Confiança do YOLO ainda é considerada
+        # - Penalidade forte para camas parcialmente visíveis
+        final_score = (
+            area_score * 0.45 +
+            center_score * 0.30 +
+            confidence * 0.25
+        ) * (1 - edge_penalty)
+
+        return final_score
+
     def detect_bed(self, frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """
         Executa inferência buscando classes de cama no frame.
+
+        Quando múltiplas camas são detectadas, seleciona a mais adequada
+        baseando-se em área, centralização e visibilidade completa no frame.
 
         Args:
             frame: Frame de vídeo (numpy array BGR).
@@ -77,9 +149,25 @@ class BedDetector:
         results = self.model.predict(frame, classes=self.bed_class_indices, verbose=False)
 
         if len(results) > 0 and len(results[0].boxes) > 0:
-            # Pega a detecção com maior confiança
             boxes = results[0].boxes
-            best_idx = boxes.conf.argmax()
+            frame_height, frame_width = frame.shape[:2]
+
+            # Calcula score para cada cama detectada
+            best_score = -1
+            best_idx = 0
+
+            for i in range(len(boxes)):
+                bbox = boxes.xyxy[i].cpu().numpy()
+                confidence = float(boxes.conf[i])
+
+                score = self._calculate_bed_score(
+                    bbox, frame_height, frame_width, confidence
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_idx = i
+
             bbox = boxes.xyxy[best_idx].cpu().numpy().astype(int)
 
             # Guarda o nome da classe detectada
