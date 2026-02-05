@@ -3,13 +3,15 @@ MVision Web Configuration Interface - FastAPI Backend
 Serves the web interface and provides API endpoints for configuration.
 """
 
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import os
+import re
+from datetime import datetime
 
 from auth import (
     init_auth,
@@ -28,6 +30,21 @@ from config_manager import (
     get_service_status,
     restart_service,
 )
+
+# Import config values for diagnostics
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from config import (
+    DEV_MODE,
+    ALERT_IMAGES_DIR,
+    ALERT_LOG_PATH,
+    ALERT_LOG_RETENTION_DAYS,
+)
+
+# Paths for diagnostics
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+ALERT_IMAGES_PATH = PROJECT_ROOT / ALERT_IMAGES_DIR
+LOGS_PATH = PROJECT_ROOT / "data" / "logs"
 
 # Initialize FastAPI
 app = FastAPI(
@@ -203,6 +220,208 @@ async def system_restart(_: str = Depends(require_auth)):
         return {"success": True, "message": message}
     else:
         raise HTTPException(status_code=500, detail=message)
+
+
+# ============== Diagnostics Endpoints ==============
+
+@app.get("/api/diagnostics/images")
+async def get_alert_images(_: str = Depends(require_auth)):
+    """List alert images (DEV_MODE only)."""
+    # Re-import to get current value
+    from config import DEV_MODE as current_dev_mode
+
+    if not current_dev_mode:
+        return {
+            "images": [],
+            "total": 0,
+            "dev_mode": False
+        }
+
+    images = []
+    if ALERT_IMAGES_PATH.exists():
+        for img_file in sorted(ALERT_IMAGES_PATH.glob("*.jpg"), key=lambda x: x.stat().st_mtime, reverse=True):
+            stat = img_file.stat()
+            # Parse filename: state_timestamp.jpg (e.g., RISCO_POTENCIAL_20240115_143022.jpg)
+            filename = img_file.name
+            state = "DESCONHECIDO"
+            timestamp = ""
+
+            # Try to extract state from filename
+            if filename.startswith("RISCO_POTENCIAL_"):
+                state = "RISCO_POTENCIAL"
+                timestamp = filename.replace("RISCO_POTENCIAL_", "").replace(".jpg", "")
+            elif filename.startswith("PACIENTE_FORA_"):
+                state = "PACIENTE_FORA"
+                timestamp = filename.replace("PACIENTE_FORA_", "").replace(".jpg", "")
+            else:
+                timestamp = filename.replace(".jpg", "")
+
+            images.append({
+                "filename": filename,
+                "timestamp": timestamp,
+                "state": state,
+                "size_kb": round(stat.st_size / 1024, 1)
+            })
+
+    return {
+        "images": images,
+        "total": len(images),
+        "dev_mode": True
+    }
+
+
+@app.get("/api/diagnostics/images/{filename}")
+async def get_alert_image(filename: str, _: str = Depends(require_auth)):
+    """Serve individual alert image (DEV_MODE only)."""
+    # Re-import to get current value
+    from config import DEV_MODE as current_dev_mode
+
+    if not current_dev_mode:
+        raise HTTPException(status_code=403, detail="DEV_MODE desabilitado")
+
+    # Security: validate filename to prevent path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
+
+    if not filename.endswith(".jpg"):
+        raise HTTPException(status_code=400, detail="Somente arquivos .jpg permitidos")
+
+    file_path = ALERT_IMAGES_PATH / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Imagem não encontrada")
+
+    return FileResponse(file_path, media_type="image/jpeg")
+
+
+@app.get("/api/diagnostics/logs/files")
+async def get_log_files(_: str = Depends(require_auth)):
+    """List available log files."""
+    files = []
+
+    if LOGS_PATH.exists():
+        # Main log file
+        main_log = LOGS_PATH / "alerts.log"
+        if main_log.exists():
+            stat = main_log.stat()
+            files.append({
+                "filename": "alerts.log",
+                "size_kb": round(stat.st_size / 1024, 1),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+
+        # Backup files (date-based: alerts.log.2024-01-15)
+        for log_file in sorted(LOGS_PATH.glob("alerts.log.*"), reverse=True):
+            # Skip non-date suffixes
+            suffix = log_file.name.replace("alerts.log.", "")
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', suffix):
+                continue
+            stat = log_file.stat()
+            files.append({
+                "filename": log_file.name,
+                "size_kb": round(stat.st_size / 1024, 1),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+
+    return {"files": files}
+
+
+@app.get("/api/diagnostics/logs")
+async def get_logs(
+    file: str = Query(default="alerts.log", description="Nome do arquivo de log"),
+    level: Optional[str] = Query(default=None, description="Filtrar por nível (INFO, WARNING, ERROR)"),
+    category: Optional[str] = Query(default=None, description="Filtrar por categoria (SISTEMA, TRANSICAO, ALERTA)"),
+    search: Optional[str] = Query(default=None, description="Busca texto livre"),
+    limit: int = Query(default=50, ge=1, le=200, description="Limite de entradas"),
+    offset: int = Query(default=0, ge=0, description="Offset para paginação"),
+    _: str = Depends(require_auth)
+):
+    """Get logs with filters and pagination."""
+    # Security: validate filename (alerts.log or alerts.log.YYYY-MM-DD)
+    if file != "alerts.log":
+        if not file.startswith("alerts.log."):
+            raise HTTPException(status_code=400, detail="Arquivo de log inválido")
+        suffix = file.replace("alerts.log.", "")
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', suffix):
+            raise HTTPException(status_code=400, detail="Arquivo de log inválido")
+
+    # Build list of available files dynamically
+    available_files = ["alerts.log"]
+    if LOGS_PATH.exists():
+        for log_file in sorted(LOGS_PATH.glob("alerts.log.*"), reverse=True):
+            suffix = log_file.name.replace("alerts.log.", "")
+            if re.match(r'^\d{4}-\d{2}-\d{2}$', suffix):
+                available_files.append(log_file.name)
+
+    file_path = LOGS_PATH / file
+    if not file_path.exists():
+        return {
+            "entries": [],
+            "total_lines": 0,
+            "file_name": file,
+            "available_files": available_files
+        }
+
+    # Log pattern: 2024-01-15 14:30:22 | INFO | [SISTEMA] Mensagem aqui
+    log_pattern = re.compile(
+        r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*\|\s*(INFO|WARNING|ERROR)\s*\|\s*\[([^\]]+)\]\s*(.*)$'
+    )
+
+    entries = []
+    total_lines = 0
+
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+
+        for line_num, line in enumerate(all_lines, 1):
+            line = line.strip()
+            if not line:
+                continue
+
+            match = log_pattern.match(line)
+            if match:
+                timestamp, log_level, log_category, details = match.groups()
+
+                # Apply filters
+                if level and log_level != level:
+                    continue
+                if category and log_category != category:
+                    continue
+                if search and search.lower() not in line.lower():
+                    continue
+
+                entries.append({
+                    "line_number": line_num,
+                    "timestamp": timestamp,
+                    "level": log_level,
+                    "category": log_category,
+                    "details": details
+                })
+            else:
+                # Non-matching line (continuation or malformed)
+                if search and search.lower() not in line.lower():
+                    continue
+                entries.append({
+                    "line_number": line_num,
+                    "timestamp": "",
+                    "level": "INFO",
+                    "category": "RAW",
+                    "details": line
+                })
+
+        total_lines = len(entries)
+        # Apply pagination
+        entries = entries[offset:offset + limit]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler arquivo: {str(e)}")
+
+    return {
+        "entries": entries,
+        "total_lines": total_lines,
+        "file_name": file,
+        "available_files": available_files
+    }
 
 
 # ============== Static Files ==============

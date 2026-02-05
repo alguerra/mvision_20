@@ -35,6 +35,45 @@ export interface ServiceStatus {
   status: string;
 }
 
+// Diagnostics types
+export interface AlertImage {
+  filename: string;
+  timestamp: string;
+  state: string;
+  size_kb: number;
+}
+
+export interface AlertImagesResponse {
+  images: AlertImage[];
+  total: number;
+  dev_mode: boolean;
+}
+
+export interface LogFile {
+  filename: string;
+  size_kb: number;
+  modified: string;
+}
+
+export interface LogFilesResponse {
+  files: LogFile[];
+}
+
+export interface LogEntry {
+  line_number: number;
+  timestamp: string;
+  level: string;
+  category: string;
+  details: string;
+}
+
+export interface LogsResponse {
+  entries: LogEntry[];
+  total_lines: number;
+  file_name: string;
+  available_files: string[];
+}
+
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -120,4 +159,39 @@ export async function getServiceStatus(): Promise<ServiceStatus> {
 
 export async function restartService(): Promise<{ success: boolean; message: string }> {
   return apiRequest('/system/restart', { method: 'POST' });
+}
+
+// Diagnostics
+export async function getAlertImages(): Promise<AlertImagesResponse> {
+  return apiRequest('/diagnostics/images');
+}
+
+export function getAlertImageUrl(filename: string): string {
+  return `${API_BASE}/diagnostics/images/${encodeURIComponent(filename)}`;
+}
+
+export async function getLogFiles(): Promise<LogFilesResponse> {
+  return apiRequest('/diagnostics/logs/files');
+}
+
+export interface GetLogsParams {
+  file?: string;
+  level?: string;
+  category?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getLogs(params: GetLogsParams = {}): Promise<LogsResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.file) searchParams.set('file', params.file);
+  if (params.level) searchParams.set('level', params.level);
+  if (params.category) searchParams.set('category', params.category);
+  if (params.search) searchParams.set('search', params.search);
+  if (params.limit !== undefined) searchParams.set('limit', params.limit.toString());
+  if (params.offset !== undefined) searchParams.set('offset', params.offset.toString());
+
+  const queryString = searchParams.toString();
+  return apiRequest(`/diagnostics/logs${queryString ? `?${queryString}` : ''}`);
 }

@@ -79,21 +79,20 @@ DASHBOARD_WIDTH = 200  # Largura do painel lateral em pixels
 FLIP_HORIZONTAL = True  # Inverter imagem horizontalmente (espelho)
 
 # Modo de desenvolvimento/homologação
-DEV_MODE = True  # Quando True, salva imagens de alertas para evidência
+DEV_MODE = False  # Quando True, salva imagens de alertas para evidência
 
 # Modo de desenvolvimento: ignora detecção de cama
 # Quando True, usa a última referência salva em bed_reference.json
 # Útil para testes em ambientes sem cama/sofá disponível
-DEV_SKIP_BED_DETECTION = True
+DEV_SKIP_BED_DETECTION = False
 
 # Diretório para imagens de alertas (modo dev/homologação)
 ALERT_IMAGES_DIR = "data/alert_images"
 MAX_ALERT_IMAGES = 50  # Máximo de imagens retidas no diretório
 
-# Arquivo de log de alertas (rotacionado)
+# Arquivo de log de alertas (rotacionado por tempo)
 ALERT_LOG_PATH = "data/logs/alerts.log"
-ALERT_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5MB por arquivo de log
-ALERT_LOG_BACKUP_COUNT = 5  # Manter 5 arquivos de backup
+ALERT_LOG_RETENTION_DAYS = 5  # Manter logs por 5 dias
 
 # Identificação do ambiente (para deploy em múltiplos Raspberry Pi)
 ENVIRONMENT_CONFIG_PATH = "config/environment.json"

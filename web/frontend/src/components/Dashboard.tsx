@@ -7,16 +7,20 @@ import { Logo } from "@/components/Logo"
 import { DeviceConfig } from "@/components/DeviceConfig"
 import { SystemSettings } from "@/components/SystemSettings"
 import { PasswordChange } from "@/components/PasswordChange"
+import { AlertImages } from "@/components/AlertImages"
+import { LogViewer } from "@/components/LogViewer"
 import { useToast } from "@/components/ui/toast"
 import {
   logout,
   getConfig,
+  getSettings,
   getSystemInfo,
   getServiceStatus,
   restartService,
   type EnvironmentConfig,
   type SystemInfo,
-  type ServiceStatus
+  type ServiceStatus,
+  type SystemSettings as SystemSettingsType
 } from "@/lib/api"
 import {
   LogOut,
@@ -26,10 +30,12 @@ import {
   Server,
   RefreshCw,
   Loader2,
-  Wifi
+  Wifi,
+  FileText,
+  Image
 } from "lucide-react"
 
-type View = 'dashboard' | 'device' | 'settings' | 'password';
+type View = 'dashboard' | 'device' | 'settings' | 'password' | 'images' | 'logs';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -40,20 +46,23 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [config, setConfig] = useState<EnvironmentConfig | null>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+  const [settings, setSettings] = useState<SystemSettingsType | null>(null);
   const [loading, setLoading] = useState(true);
   const [restarting, setRestarting] = useState(false);
   const { toast } = useToast();
 
   const loadData = async () => {
     try {
-      const [configData, infoData, statusData] = await Promise.all([
+      const [configData, infoData, statusData, settingsData] = await Promise.all([
         getConfig(),
         getSystemInfo(),
-        getServiceStatus()
+        getServiceStatus(),
+        getSettings()
       ]);
       setConfig(configData);
       setSystemInfo(infoData);
       setServiceStatus(statusData);
+      setSettings(settingsData);
     } catch (err) {
       toast({
         title: "Erro ao carregar dados",
@@ -130,6 +139,18 @@ export function Dashboard({ onLogout }: DashboardProps) {
   if (view === 'password') {
     return (
       <PasswordChange onBack={() => setView('dashboard')} />
+    );
+  }
+
+  if (view === 'images') {
+    return (
+      <AlertImages onBack={() => setView('dashboard')} />
+    );
+  }
+
+  if (view === 'logs') {
+    return (
+      <LogViewer onBack={() => setView('dashboard')} />
     );
   }
 
@@ -264,6 +285,50 @@ export function Dashboard({ onLogout }: DashboardProps) {
               </p>
             </CardContent>
           </Card>
+
+          {/* Logs Card - Always visible */}
+          <Card
+            className="cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setView('logs')}
+          >
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <FileText className="h-6 w-6 text-primary" />
+                <CardTitle className="text-lg">Logs</CardTitle>
+              </div>
+              <CardDescription>
+                Historico de eventos do sistema
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Visualizar alertas, transicoes e eventos
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Alert Images Card - Only visible when DEV_MODE is active */}
+          {settings?.DEV_MODE && (
+            <Card
+              className="cursor-pointer hover:border-primary/50 transition-colors border-yellow-500/30"
+              onClick={() => setView('images')}
+            >
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <Image className="h-6 w-6 text-yellow-500" />
+                  <CardTitle className="text-lg">Imagens DEV</CardTitle>
+                </div>
+                <CardDescription>
+                  Capturas de alertas (modo dev)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">
+                  Imagens salvas durante alertas
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </div>

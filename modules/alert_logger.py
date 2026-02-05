@@ -11,7 +11,7 @@ Formato do log:
 import logging
 import os
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
@@ -20,9 +20,8 @@ import numpy as np
 
 from config import (
     ALERT_IMAGES_DIR,
-    ALERT_LOG_BACKUP_COUNT,
-    ALERT_LOG_MAX_BYTES,
     ALERT_LOG_PATH,
+    ALERT_LOG_RETENTION_DAYS,
     DEV_MODE,
     MAX_ALERT_IMAGES,
 )
@@ -38,8 +37,7 @@ class AlertLogger:
         images_dir: str = ALERT_IMAGES_DIR,
         max_images: int = MAX_ALERT_IMAGES,
         dev_mode: bool = DEV_MODE,
-        max_bytes: int = ALERT_LOG_MAX_BYTES,
-        backup_count: int = ALERT_LOG_BACKUP_COUNT,
+        retention_days: int = ALERT_LOG_RETENTION_DAYS,
     ):
         """
         Inicializa o logger de alertas.
@@ -49,8 +47,7 @@ class AlertLogger:
             images_dir: Diretorio para imagens de alertas
             max_images: Maximo de imagens a reter
             dev_mode: Se True, salva imagens de evidencia
-            max_bytes: Tamanho maximo do arquivo de log antes de rotacionar
-            backup_count: Numero de arquivos de backup a manter
+            retention_days: Dias para manter logs antes de rotacionar
         """
         self.log_path = log_path
         self.images_dir = images_dir
@@ -67,8 +64,8 @@ class AlertLogger:
         # Cria diretorios se nao existem
         self._ensure_directories()
 
-        # Configura logger rotacionado
-        self.logger = self._setup_logger(max_bytes, backup_count)
+        # Configura logger rotacionado por tempo
+        self.logger = self._setup_logger(retention_days)
 
         # Contador de alertas
         self.alert_count = 0
@@ -84,13 +81,12 @@ class AlertLogger:
         if self.dev_mode:
             Path(self.images_dir).mkdir(parents=True, exist_ok=True)
 
-    def _setup_logger(self, max_bytes: int, backup_count: int) -> logging.Logger:
+    def _setup_logger(self, retention_days: int) -> logging.Logger:
         """
-        Configura logger com handler rotacionado.
+        Configura logger com handler rotacionado por tempo.
 
         Args:
-            max_bytes: Tamanho maximo do arquivo antes de rotacionar
-            backup_count: Numero de backups a manter
+            retention_days: Dias para manter logs
 
         Returns:
             Logger configurado
@@ -101,11 +97,12 @@ class AlertLogger:
         # Remove handlers existentes para evitar duplicacao
         logger.handlers.clear()
 
-        # Handler rotacionado
-        handler = RotatingFileHandler(
+        # Handler rotacionado por tempo (diariamente, mantendo N dias)
+        handler = TimedRotatingFileHandler(
             self.log_path,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
+            when="midnight",
+            interval=1,
+            backupCount=retention_days,
             encoding="utf-8",
         )
 
