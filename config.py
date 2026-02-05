@@ -79,12 +79,12 @@ DASHBOARD_WIDTH = 200  # Largura do painel lateral em pixels
 FLIP_HORIZONTAL = True  # Inverter imagem horizontalmente (espelho)
 
 # Modo de desenvolvimento/homologação
-DEV_MODE = False  # Quando True, salva imagens de alertas para evidência
+DEV_MODE = True  # Quando True, salva imagens de alertas para evidência
 
 # Modo de desenvolvimento: ignora detecção de cama
 # Quando True, usa a última referência salva em bed_reference.json
 # Útil para testes em ambientes sem cama/sofá disponível
-DEV_SKIP_BED_DETECTION = False
+DEV_SKIP_BED_DETECTION = True
 
 # Diretório para imagens de alertas (modo dev/homologação)
 ALERT_IMAGES_DIR = "data/alert_images"

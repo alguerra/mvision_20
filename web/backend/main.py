@@ -241,20 +241,22 @@ async def get_alert_images(_: str = Depends(require_auth)):
     if ALERT_IMAGES_PATH.exists():
         for img_file in sorted(ALERT_IMAGES_PATH.glob("*.jpg"), key=lambda x: x.stat().st_mtime, reverse=True):
             stat = img_file.stat()
-            # Parse filename: state_timestamp.jpg (e.g., RISCO_POTENCIAL_20240115_143022.jpg)
+            # Parse filename: alert_YYYYMMDD_HHMMSS_mmm_STATE.jpg
             filename = img_file.name
             state = "DESCONHECIDO"
             timestamp = ""
 
-            # Try to extract state from filename
-            if filename.startswith("RISCO_POTENCIAL_"):
+            # Try to extract state and timestamp from filename
+            # Format: alert_20260126_212333_132_RISCO_POTENCIAL.jpg
+            if "_RISCO_POTENCIAL" in filename:
                 state = "RISCO_POTENCIAL"
-                timestamp = filename.replace("RISCO_POTENCIAL_", "").replace(".jpg", "")
-            elif filename.startswith("PACIENTE_FORA_"):
+            elif "_PACIENTE_FORA" in filename:
                 state = "PACIENTE_FORA"
-                timestamp = filename.replace("PACIENTE_FORA_", "").replace(".jpg", "")
-            else:
-                timestamp = filename.replace(".jpg", "")
+
+            # Extract timestamp (YYYYMMDD_HHMMSS)
+            match = re.search(r'alert_(\d{8}_\d{6})', filename)
+            if match:
+                timestamp = match.group(1)
 
             images.append({
                 "filename": filename,
@@ -361,9 +363,10 @@ async def get_logs(
             "available_files": available_files
         }
 
-    # Log pattern: 2024-01-15 14:30:22 | INFO | [SISTEMA] Mensagem aqui
+    # Log pattern: 2026-01-26 21:22:25 | INFO | Mensagem aqui
+    # ou com device info: 2026-01-26 21:22:25 | ENV | HOSP | SETOR | LEITO | INFO | Mensagem
     log_pattern = re.compile(
-        r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*\|\s*(INFO|WARNING|ERROR)\s*\|\s*\[([^\]]+)\]\s*(.*)$'
+        r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*\|\s*(?:[^|]+\s*\|\s*)?(?:[^|]+\s*\|\s*)?(?:[^|]+\s*\|\s*)?(?:[^|]+\s*\|\s*)?(INFO|WARNING|ERROR)\s*\|\s*(.*)$'
     )
 
     entries = []
@@ -380,7 +383,15 @@ async def get_logs(
 
             match = log_pattern.match(line)
             if match:
-                timestamp, log_level, log_category, details = match.groups()
+                timestamp, log_level, details = match.groups()
+
+                # Extract category from message content
+                if "ALERTA" in details:
+                    log_category = "ALERTA"
+                elif "Transicao" in details or "transicao" in details:
+                    log_category = "TRANSICAO"
+                else:
+                    log_category = "SISTEMA"
 
                 # Apply filters
                 if level and log_level != level:
