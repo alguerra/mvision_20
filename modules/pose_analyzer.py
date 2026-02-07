@@ -54,9 +54,19 @@ class BodyPoints:
     left_ankle_conf: float = 0.0
     right_ankle_conf: float = 0.0
 
+    # Ombros individuais
+    left_shoulder: Optional[Tuple[float, float]] = None
+    right_shoulder: Optional[Tuple[float, float]] = None
+    left_shoulder_conf: float = 0.0
+    right_shoulder_conf: float = 0.0
+
     def has_core_points(self, min_conf: float) -> bool:
         """Verifica se pontos essenciais (pescoco e quadris) estao visiveis."""
         return self.neck_conf >= min_conf and self.hip_conf >= min_conf
+
+    def is_occluded_mode(self, min_conf: float) -> bool:
+        """Verifica se esta em modo ocluso (pescoco visivel, quadris nao)."""
+        return self.neck_conf >= min_conf and self.hip_conf < min_conf
 
     def get_monitored_points(self, min_conf: float) -> List[Tuple[str, Tuple[float, float], float]]:
         """
@@ -85,6 +95,12 @@ class BodyPoints:
         if self.right_ankle and self.right_ankle_conf >= min_conf:
             points.append(("right_ankle", self.right_ankle, self.right_ankle_conf))
 
+        if self.left_shoulder and self.left_shoulder_conf >= min_conf:
+            points.append(("left_shoulder", self.left_shoulder, self.left_shoulder_conf))
+
+        if self.right_shoulder and self.right_shoulder_conf >= min_conf:
+            points.append(("right_shoulder", self.right_shoulder, self.right_shoulder_conf))
+
         return points
 
 
@@ -99,12 +115,15 @@ class PositionAnalysis:
     right_knee_in_bed: Optional[bool] = None
     left_ankle_in_bed: Optional[bool] = None
     right_ankle_in_bed: Optional[bool] = None
+    left_shoulder_in_bed: Optional[bool] = None
+    right_shoulder_in_bed: Optional[bool] = None
 
     # Resumo
     all_monitored_in_bed: bool = True
     any_outside_bed: bool = False
     all_outside_bed: bool = False
     core_points_visible: bool = False
+    occluded_mode: bool = False
 
     # Contagem
     points_inside: int = 0
@@ -176,6 +195,15 @@ class PoseAnalyzer:
             neck_y = (left_shoulder[1] + right_shoulder[1]) / 2
             body.neck = (neck_x, neck_y)
             body.neck_conf = min(left_shoulder_conf, right_shoulder_conf)
+
+        # Armazena ombros individuais
+        if left_shoulder_conf >= self.confidence_min:
+            body.left_shoulder = (float(left_shoulder[0]), float(left_shoulder[1]))
+            body.left_shoulder_conf = float(left_shoulder_conf)
+
+        if right_shoulder_conf >= self.confidence_min:
+            body.right_shoulder = (float(right_shoulder[0]), float(right_shoulder[1]))
+            body.right_shoulder_conf = float(right_shoulder_conf)
 
         # Extrai quadris para calcular ponto medio
         left_hip = keypoints[KP_LEFT_HIP]
@@ -263,6 +291,7 @@ class PoseAnalyzer:
 
         # Verifica pontos essenciais
         analysis.core_points_visible = body_points.has_core_points(self.confidence_high)
+        analysis.occluded_mode = body_points.is_occluded_mode(self.confidence_high)
 
         # Lista para contar pontos
         points_inside = 0
@@ -273,6 +302,25 @@ class PoseAnalyzer:
         if body_points.neck and body_points.neck_conf >= self.confidence_high:
             in_bed = self.is_point_in_bed(body_points.neck)
             analysis.neck_in_bed = in_bed
+            points_monitored += 1
+            if in_bed:
+                points_inside += 1
+            else:
+                points_outside += 1
+
+        # Analisa ombros
+        if body_points.left_shoulder and body_points.left_shoulder_conf >= self.confidence_high:
+            in_bed = self.is_point_in_bed(body_points.left_shoulder)
+            analysis.left_shoulder_in_bed = in_bed
+            points_monitored += 1
+            if in_bed:
+                points_inside += 1
+            else:
+                points_outside += 1
+
+        if body_points.right_shoulder and body_points.right_shoulder_conf >= self.confidence_high:
+            in_bed = self.is_point_in_bed(body_points.right_shoulder)
+            analysis.right_shoulder_in_bed = in_bed
             points_monitored += 1
             if in_bed:
                 points_inside += 1
@@ -588,7 +636,7 @@ class PoseStateMachineEMA:
         # Logica robusta para lidar com falsos positivos intermitentes do YOLO
         if person_count == 0:
             self._frames_without_person += 1
-        elif analysis is not None and analysis.core_points_visible:
+        elif analysis is not None and (analysis.core_points_visible or analysis.occluded_mode):
             # So reseta se tiver pessoa COM pontos corporais visiveis (pessoa real)
             self._frames_without_person = 0
         else:
@@ -602,8 +650,8 @@ class PoseStateMachineEMA:
             self._update_state_from_scores(person_count)
             return self.current_state
 
-        # Paciente visivel = pontos essenciais detectados (independente de posicao)
-        signal_patient_visible = 1.0 if analysis.core_points_visible else 0.0
+        # Paciente visivel = pontos essenciais detectados OU modo ocluso
+        signal_patient_visible = 1.0 if (analysis.core_points_visible or analysis.occluded_mode) else 0.0
 
         # Paciente na cama = pontos essenciais visiveis E dentro da cama
         signal_patient_in_bed = 1.0 if (
@@ -638,6 +686,38 @@ class PoseStateMachineEMA:
             analysis.points_monitored > 0 and
             analysis.all_monitored_in_bed
         ) else 0.0
+
+        # Override de sinais em modo ocluso (pescoco+ombros visiveis, quadris nao)
+        if analysis.occluded_mode and not analysis.core_points_visible:
+            # Coleta posicao dos pontos upper body
+            upper_positions = []
+            if analysis.neck_in_bed is not None:
+                upper_positions.append(analysis.neck_in_bed)
+            if analysis.left_shoulder_in_bed is not None:
+                upper_positions.append(analysis.left_shoulder_in_bed)
+            if analysis.right_shoulder_in_bed is not None:
+                upper_positions.append(analysis.right_shoulder_in_bed)
+
+            if upper_positions:
+                all_in = all(upper_positions)
+                all_out = not any(upper_positions)
+
+                if all_in:
+                    signal_patient_in_bed = 1.0
+                    signal_safe = 1.0
+                    signal_risk = 0.0
+                    signal_out = 0.0
+                elif all_out:
+                    signal_out = 1.0
+                    signal_patient_in_bed = 0.0
+                    signal_safe = 0.0
+                    signal_risk = 0.0
+                else:
+                    # Parcial - algum fora
+                    signal_risk = 1.0
+                    signal_patient_in_bed = 0.0
+                    signal_safe = 0.0
+                    signal_out = 0.0
 
         # Atualiza scores EMA
         self.score_patient_visible = self._ema(self.score_patient_visible, signal_patient_visible)

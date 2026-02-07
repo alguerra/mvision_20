@@ -602,6 +602,10 @@ class DisplayManager:
         # Desenha cada ponto
         if body_points.neck:
             draw_point(body_points.neck, body_points.neck_conf, "NEC")
+        if body_points.left_shoulder:
+            draw_point(body_points.left_shoulder, body_points.left_shoulder_conf, "LSH")
+        if body_points.right_shoulder:
+            draw_point(body_points.right_shoulder, body_points.right_shoulder_conf, "RSH")
         if body_points.hip_center:
             draw_point(body_points.hip_center, body_points.hip_conf, "HIP")
         if body_points.left_knee:
@@ -745,11 +749,24 @@ class DisplayManager:
             1,
         )
 
+        # Modo ocluso
+        if analysis and analysis.occluded_mode:
+            cv2.putText(
+                dashboard,
+                "MODO OCLUSO",
+                (10, 100),
+                self.FONT,
+                self.FONT_SCALE_SMALL,
+                (0, 255, 255),  # Amarelo
+                1,
+            )
+
         # Separador
-        cv2.line(dashboard, (10, 100), (self.dashboard_width - 10, 100), self.COLOR_TEXT, 1)
+        y_sep = 115 if (analysis and analysis.occluded_mode) else 100
+        cv2.line(dashboard, (10, y_sep), (self.dashboard_width - 10, y_sep), self.COLOR_TEXT, 1)
 
         # Pontos do corpo
-        y_pos = 125
+        y_pos = y_sep + 25
         cv2.putText(
             dashboard,
             "Keypoints:",
@@ -764,6 +781,8 @@ class DisplayManager:
         if body_points:
             points_info = [
                 ("Pescoco", body_points.neck_conf, analysis.neck_in_bed if analysis else None),
+                ("Ombro E", body_points.left_shoulder_conf, analysis.left_shoulder_in_bed if analysis else None),
+                ("Ombro D", body_points.right_shoulder_conf, analysis.right_shoulder_in_bed if analysis else None),
                 ("Quadris", body_points.hip_conf, analysis.hip_in_bed if analysis else None),
                 ("Joelho E", body_points.left_knee_conf, analysis.left_knee_in_bed if analysis else None),
                 ("Joelho D", body_points.right_knee_conf, analysis.right_knee_in_bed if analysis else None),
