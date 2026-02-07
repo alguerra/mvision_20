@@ -235,6 +235,54 @@ class BedDetector:
         elapsed_hours = (time.time() - self.last_detection_time) / 3600
         return elapsed_hours >= BED_RECHECK_INTERVAL_HOURS
 
+    def postpone_recheck(self) -> None:
+        """Adia proximo recheck atualizando timestamp para agora."""
+        self.last_detection_time = time.time()
+
+    def is_bbox_consistent(
+        self,
+        new_bbox: Tuple[int, int, int, int],
+        min_iou: float = 0.3,
+    ) -> bool:
+        """
+        Verifica se novo bbox e consistente com o atual (IoU minimo).
+
+        Protege contra deteccoes espurias que substituiriam a
+        calibracao valida (ex: pessoa ou objeto detectado como cama).
+
+        Args:
+            new_bbox: Novo bbox candidato (x1, y1, x2, y2).
+            min_iou: IoU minimo para considerar consistente.
+
+        Returns:
+            True se bbox e consistente ou nao ha referencia anterior.
+        """
+        if self.bed_bbox is None:
+            return True
+
+        ax1, ay1, ax2, ay2 = self.bed_bbox
+        bx1, by1, bx2, by2 = new_bbox
+
+        # Calcula intersecao
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+
+        if ix1 >= ix2 or iy1 >= iy2:
+            return False
+
+        intersection = (ix2 - ix1) * (iy2 - iy1)
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        union = area_a + area_b - intersection
+
+        if union <= 0:
+            return False
+
+        iou = intersection / union
+        return iou >= min_iou
+
     def get_bed_bbox(self) -> Optional[Tuple[int, int, int, int]]:
         """
         Retorna bbox atual da cama.

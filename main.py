@@ -394,12 +394,17 @@ def run_monitoring_loop(
             # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION)
             if not DEV_SKIP_BED_DETECTION and bed_detector.needs_recheck():
                 new_bbox = bed_detector.detect_bed(frame)
-                if new_bbox:
+                if new_bbox and bed_detector.is_bbox_consistent(new_bbox):
                     bed_bbox = new_bbox
                     bed_detector.save_reference(bed_bbox)
                     pose_analyzer.update_bed_bbox(bed_bbox)
                     monitor.update_bed_bbox(bed_bbox)
                     logger.info(f"Cama re-detectada: {bed_bbox}")
+                else:
+                    # Falhou ou inconsistente: adia recheck para proximo intervalo
+                    bed_detector.postpone_recheck()
+                    if new_bbox:
+                        logger.info(f"Recheck ignorado: bbox inconsistente (IoU baixo)")
 
             # Detecta pose com YOLOv8-Pose
             results = yolo_pose.predict(frame, conf=YOLO_POSE_CONFIDENCE, verbose=False)
