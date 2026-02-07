@@ -196,8 +196,7 @@ class CameraOpenCV(CameraBase):
     def open(self) -> bool:
         self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
         if self.cap.isOpened():
-            # DSHOW: limita buffer a 1 frame para evitar acumulo e travamento
-            self.cap.set(self.cv2.CAP_PROP_BUFFERSIZE, 1)
+            self._configure_capture()
             self.set_resolution(self.width, self.height)
             try:
                 backend_name = self.cap.getBackendName()
@@ -207,9 +206,18 @@ class CameraOpenCV(CameraBase):
             return True
         return False
 
+    def _configure_capture(self) -> None:
+        """Configura propriedades de captura para evitar acumulo de buffer."""
+        self.cap.set(self.cv2.CAP_PROP_BUFFERSIZE, 1)
+        # Reduz FPS da camera para perto da taxa de leitura do sistema (~5 FPS)
+        # Evita acumulo de frames no buffer interno do DirectShow
+        self.cap.set(self.cv2.CAP_PROP_FPS, 10)
+
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         if self.cap is None:
             return False, None
+        # Drena frames antigos do buffer para obter o mais recente
+        self.cap.grab()
         ret, frame = self.cap.read()
         if ret:
             self._consecutive_errors = 0
@@ -232,7 +240,7 @@ class CameraOpenCV(CameraBase):
             time.sleep(1)
             self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
             if self.cap.isOpened():
-                self.cap.set(self.cv2.CAP_PROP_BUFFERSIZE, 1)
+                self._configure_capture()
                 self.set_resolution(self.width, self.height)
                 self._consecutive_errors = 0
                 print("[Camera] OpenCV reiniciada com sucesso")

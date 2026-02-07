@@ -58,6 +58,7 @@ from config import (
     POSE_FRAMES_TO_CONFIRM,
     WINDOW_NAME,
     YOLO_MODEL,
+    YOLO_POSE_CONFIDENCE,
     YOLO_POSE_MODEL,
 )
 from gui.display import DisplayManager
@@ -401,7 +402,7 @@ def run_monitoring_loop(
                     logger.info(f"Cama re-detectada: {bed_bbox}")
 
             # Detecta pose com YOLOv8-Pose
-            results = yolo_pose.predict(frame, verbose=False)
+            results = yolo_pose.predict(frame, conf=YOLO_POSE_CONFIDENCE, verbose=False)
 
             body_points = None
             analysis = None

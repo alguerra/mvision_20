@@ -16,6 +16,7 @@ YOLO_MODEL = "yolov8n.pt"
 
 # Modelo YOLOv8-Pose para detecção de keypoints
 YOLO_POSE_MODEL = "yolov8n-pose.pt"
+YOLO_POSE_CONFIDENCE = 0.15        # Confiança mínima para detecção de pessoas (default YOLO: 0.25)
 
 # Thresholds de confiança para keypoints
 POSE_CONFIDENCE_HIGH = 0.7        # Confiança alta (ponto confiável)
