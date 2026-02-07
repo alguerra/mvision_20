@@ -15,8 +15,8 @@ FEATURE_BUFFER_SIZE = 15
 YOLO_MODEL = "yolov8n.pt"
 
 # Modelo YOLOv8-Pose para detecção de keypoints
-YOLO_POSE_MODEL = "yolov8n-pose.pt"
-YOLO_POSE_CONFIDENCE = 0.15        # Confiança mínima para detecção de pessoas (default YOLO: 0.25)
+YOLO_POSE_MODEL = "yolov8s-pose.pt"
+YOLO_POSE_CONFIDENCE = 0.20        # Confiança mínima para detecção de pessoas (default YOLO: 0.25)
 
 # Thresholds de confiança para keypoints
 POSE_CONFIDENCE_HIGH = 0.7        # Confiança alta (ponto confiável)
@@ -55,8 +55,7 @@ CAMERA_BACKEND = "DSHOW"
 YOLO_CLASS_PERSON = 0
 
 # Nomes das classes COCO para detectar cama (resolução dinâmica por nome)
-#BED_CLASS_NAMES = ["bed", "couch"]
-BED_CLASS_NAMES = ["couch"]
+BED_CLASS_NAMES = ["bed", "couch"]
 
 # Thresholds para transições de estado
 THRESHOLD_REL_HEIGHT_SITTING = 0.6  # Altura relativa indicando paciente sentando
