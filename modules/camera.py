@@ -196,6 +196,8 @@ class CameraOpenCV(CameraBase):
     def open(self) -> bool:
         self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
         if self.cap.isOpened():
+            # DSHOW: limita buffer a 1 frame para evitar acumulo e travamento
+            self.cap.set(self.cv2.CAP_PROP_BUFFERSIZE, 1)
             self.set_resolution(self.width, self.height)
             try:
                 backend_name = self.cap.getBackendName()
@@ -230,6 +232,7 @@ class CameraOpenCV(CameraBase):
             time.sleep(1)
             self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
             if self.cap.isOpened():
+                self.cap.set(self.cv2.CAP_PROP_BUFFERSIZE, 1)
                 self.set_resolution(self.width, self.height)
                 self._consecutive_errors = 0
                 print("[Camera] OpenCV reiniciada com sucesso")
