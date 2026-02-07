@@ -47,11 +47,15 @@ KP_RIGHT_ANKLE = 16
 # Índice da câmera (0 = câmera padrão)
 CAMERA_INDEX = 0
 
+# Backend OpenCV no Windows ("DSHOW" = DirectShow, mais estavel; "MSMF" = padrao; None = auto)
+CAMERA_BACKEND = "DSHOW"
+
 # Classes YOLO COCO para detecção
 YOLO_CLASS_PERSON = 0
 
 # Nomes das classes COCO para detectar cama (resolução dinâmica por nome)
-BED_CLASS_NAMES = ["bed", "couch"]
+#BED_CLASS_NAMES = ["bed", "couch"]
+BED_CLASS_NAMES = ["couch"]
 
 # Thresholds para transições de estado
 THRESHOLD_REL_HEIGHT_SITTING = 0.6  # Altura relativa indicando paciente sentando
@@ -84,7 +88,7 @@ DEV_MODE = True  # Quando True, salva imagens de alertas para evidência
 # Modo de desenvolvimento: ignora detecção de cama
 # Quando True, usa a última referência salva em bed_reference.json
 # Útil para testes em ambientes sem cama/sofá disponível
-DEV_SKIP_BED_DETECTION = True
+DEV_SKIP_BED_DETECTION = False
 
 # Diretório para imagens de alertas (modo dev/homologação)
 ALERT_IMAGES_DIR = "data/alert_images"

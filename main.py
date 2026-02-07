@@ -45,6 +45,7 @@ from config import (
     CALIBRATION_MAX_VARIANCE,
     CALIBRATION_MIN_DETECTION_RATE,
     CALIBRATION_SUCCESS_DISPLAY_SECONDS,
+    CAMERA_BACKEND,
     CAMERA_INDEX,
     DEV_MODE,
     DEV_SKIP_BED_DETECTION,
@@ -264,7 +265,7 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
 
     # 1. Inicialização da câmera
     print("\n[1/4] Inicializando camera...")
-    camera = create_camera(CAMERA_INDEX)
+    camera = create_camera(CAMERA_INDEX, backend=CAMERA_BACKEND)
 
     if not camera.open():
         raise RuntimeError("Nao foi possivel abrir a camera")

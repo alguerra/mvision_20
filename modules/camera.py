@@ -159,12 +159,13 @@ class CameraBase(ABC):
 class CameraOpenCV(CameraBase):
     """Implementacao de camera usando OpenCV (Windows)."""
 
-    def __init__(self, camera_index: int = 0):
+    def __init__(self, camera_index: int = 0, backend: Optional[str] = None):
         """
         Inicializa camera OpenCV.
 
         Args:
             camera_index: Indice da camera (0 = padrao)
+            backend: Backend de captura ("DSHOW", "MSMF", None = auto)
         """
         import cv2
         self.cv2 = cv2
@@ -172,18 +173,70 @@ class CameraOpenCV(CameraBase):
         self.cap: Optional[cv2.VideoCapture] = None
         self.width = 640
         self.height = 480
+        self._backend = self._resolve_backend(backend)
+        self._backend_name = backend
+        self._consecutive_errors = 0
+        self._max_errors_before_restart = 5
+
+    def _resolve_backend(self, backend: Optional[str]) -> int:
+        """Converte string de backend para constante cv2.CAP_*."""
+        if backend is None:
+            return self.cv2.CAP_ANY
+        backend_map = {
+            "DSHOW": self.cv2.CAP_DSHOW,
+            "MSMF": self.cv2.CAP_MSMF,
+            "V4L2": self.cv2.CAP_V4L2,
+        }
+        resolved = backend_map.get(backend.upper())
+        if resolved is None:
+            print(f"[Camera] Backend '{backend}' desconhecido, usando auto")
+            return self.cv2.CAP_ANY
+        return resolved
 
     def open(self) -> bool:
-        self.cap = self.cv2.VideoCapture(self.camera_index)
+        self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
         if self.cap.isOpened():
             self.set_resolution(self.width, self.height)
+            try:
+                backend_name = self.cap.getBackendName()
+            except Exception:
+                backend_name = self._backend_name or "desconhecido"
+            print(f"[Camera] Aberta com backend: {backend_name}")
             return True
         return False
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         if self.cap is None:
             return False, None
-        return self.cap.read()
+        ret, frame = self.cap.read()
+        if ret:
+            self._consecutive_errors = 0
+            return True, frame
+        self._consecutive_errors += 1
+        if self._consecutive_errors <= 3:
+            print(f"[Camera] Erro ao capturar frame ({self._consecutive_errors})")
+        if self._consecutive_errors >= self._max_errors_before_restart:
+            print("[Camera] Muitos erros consecutivos, tentando reiniciar...")
+            self._restart_camera()
+        return False, None
+
+    def _restart_camera(self) -> None:
+        """Tenta reiniciar a camera apos erros."""
+        import time
+        try:
+            if self.cap is not None:
+                self.cap.release()
+                self.cap = None
+            time.sleep(1)
+            self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
+            if self.cap.isOpened():
+                self.set_resolution(self.width, self.height)
+                self._consecutive_errors = 0
+                print("[Camera] OpenCV reiniciada com sucesso")
+            else:
+                print("[Camera] Falha ao reiniciar - camera nao abriu")
+        except Exception as e:
+            print(f"[Camera] Falha ao reiniciar camera: {e}")
 
     def release(self) -> None:
         if self.cap is not None:
@@ -385,25 +438,26 @@ class DisplayHeadless(DisplayBase):
         pass
 
 
-def create_camera(camera_index: int = 0) -> CameraBase:
+def create_camera(camera_index: int = 0, backend: Optional[str] = None) -> CameraBase:
     """
     Cria instancia de camera apropriada para a plataforma.
 
     Args:
         camera_index: Indice da camera (usado apenas no Windows)
+        backend: Backend OpenCV ("DSHOW", "MSMF", None = auto). Ignorado no Picamera2.
 
     Returns:
         Instancia de CameraBase
     """
     if IS_WINDOWS:
         print(f"[Camera] Plataforma Windows - usando OpenCV")
-        return CameraOpenCV(camera_index)
+        return CameraOpenCV(camera_index, backend=backend)
     elif IS_LINUX:
         print(f"[Camera] Plataforma Linux - usando Picamera2")
         return CameraPicamera()
     else:
         print(f"[Camera] Plataforma {PLATFORM} - tentando OpenCV")
-        return CameraOpenCV(camera_index)
+        return CameraOpenCV(camera_index, backend=backend)
 
 
 def create_display(headless: bool = False) -> DisplayBase:
