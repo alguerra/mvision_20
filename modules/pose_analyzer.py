@@ -27,10 +27,13 @@ from config import (
     KP_RIGHT_HIP,
     KP_RIGHT_KNEE,
     KP_RIGHT_SHOULDER,
+    PERSON_BBOX_ASPECT_RATIO_UPRIGHT,
+    PERSON_BED_OVERLAP_MAX_STANDING,
     POSE_CONFIDENCE_HIGH,
     POSE_CONFIDENCE_MIN,
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
+    TORSO_RATIO_MIN_FOR_LYING,
 )
 
 
@@ -124,6 +127,12 @@ class PositionAnalysis:
     all_outside_bed: bool = False
     core_points_visible: bool = False
     occluded_mode: bool = False
+
+    # Detecção de postura (pessoa em pé vs deitada)
+    is_standing: Optional[bool] = None            # True = pessoa provavelmente em pé
+    person_bbox_aspect_ratio: Optional[float] = None  # height/width do bbox da pessoa
+    person_bed_overlap: Optional[float] = None    # Fração do bbox da pessoa dentro da cama (0-1)
+    torso_ratio: Optional[float] = None           # Dist pescoço-quadril / bbox_height
 
     # Contagem
     points_inside: int = 0
@@ -277,7 +286,11 @@ class PoseAnalyzer:
         px, py = point
         return x1_expanded <= px <= x2_expanded and y1_expanded <= py <= y2_expanded
 
-    def analyze_position(self, body_points: BodyPoints) -> PositionAnalysis:
+    def analyze_position(
+        self,
+        body_points: BodyPoints,
+        person_bbox: Optional[Tuple[int, int, int, int]] = None,
+    ) -> PositionAnalysis:
         """
         Analisa posicao do paciente em relacao a cama.
 
@@ -374,6 +387,50 @@ class PoseAnalyzer:
                 points_inside += 1
             else:
                 points_outside += 1
+
+        # --- Detecção de pessoa em pé (passante) ---
+        standing_signals = 0
+
+        if person_bbox is not None:
+            px1, py1, px2, py2 = person_bbox
+            p_height = py2 - py1
+            p_width = px2 - px1
+            p_area = p_height * p_width
+
+            # Critério 1: Bbox alto e estreito (aspect ratio)
+            if p_width > 0:
+                bbox_ar = p_height / p_width
+                analysis.person_bbox_aspect_ratio = bbox_ar
+                if bbox_ar > PERSON_BBOX_ASPECT_RATIO_UPRIGHT:
+                    standing_signals += 1
+
+            # Critério 2: Baixa sobreposição entre bbox da pessoa e bbox da cama
+            bed_x1, bed_y1, bed_x2, bed_y2 = self.bed_bbox
+            if p_area > 0:
+                inter_x1 = max(px1, bed_x1)
+                inter_y1 = max(py1, bed_y1)
+                inter_x2 = min(px2, bed_x2)
+                inter_y2 = min(py2, bed_y2)
+                inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+                overlap = inter_area / p_area
+                analysis.person_bed_overlap = overlap
+                if overlap < PERSON_BED_OVERLAP_MAX_STANDING:
+                    standing_signals += 1
+
+            # Critério 3: Torso comprimido (foreshortening = deitado → desconta)
+            if (body_points.neck and body_points.hip_center and
+                    body_points.neck_conf >= self.confidence_high and
+                    body_points.hip_conf >= self.confidence_high and
+                    p_height > 0):
+                neck_y = body_points.neck[1]
+                hip_y = body_points.hip_center[1]
+                torso_px = abs(neck_y - hip_y)
+                torso_ratio = torso_px / p_height
+                analysis.torso_ratio = torso_ratio
+                if torso_ratio < TORSO_RATIO_MIN_FOR_LYING:
+                    standing_signals -= 1
+
+            analysis.is_standing = standing_signals >= 1
 
         # Calcula resumo
         analysis.points_inside = points_inside
@@ -653,11 +710,12 @@ class PoseStateMachineEMA:
         # Paciente visivel = pontos essenciais detectados OU modo ocluso
         signal_patient_visible = 1.0 if (analysis.core_points_visible or analysis.occluded_mode) else 0.0
 
-        # Paciente na cama = pontos essenciais visiveis E dentro da cama
+        # Paciente na cama = pontos essenciais visiveis E dentro da cama E NÃO em pé
         signal_patient_in_bed = 1.0 if (
             analysis.core_points_visible and
             analysis.neck_in_bed and
-            analysis.hip_in_bed
+            analysis.hip_in_bed and
+            not (analysis.is_standing is True)
         ) else 0.0
 
         # Pontos essenciais (pescoco e quadris) fora da cama

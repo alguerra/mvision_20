@@ -35,6 +35,11 @@ EMA_THRESHOLD_EXIT_OUT = 0.3      # Score para sair de PACIENTE_FORA
 EMA_THRESHOLD_PATIENT_DETECTED = 0.8  # Score para confirmar paciente na cama
 EMA_THRESHOLD_PATIENT_LOST = 0.15     # Score para considerar paciente perdido (muito baixo)
 
+# Detecção de pessoa em pé (evita falso positivo com passante)
+PERSON_BBOX_ASPECT_RATIO_UPRIGHT = 1.6   # height/width do bbox: acima = em pé (1.6 para incluir crianças/corpo parcial)
+PERSON_BED_OVERLAP_MAX_STANDING = 0.5    # Sobreposição pessoa↔cama: abaixo = provavelmente em pé
+TORSO_RATIO_MIN_FOR_LYING = 0.15         # Dist pescoço-quadril / bbox_height: abaixo = foreshortened (deitado)
+
 # Índices dos keypoints COCO format (YOLOv8-Pose)
 KP_LEFT_SHOULDER = 5
 KP_RIGHT_SHOULDER = 6

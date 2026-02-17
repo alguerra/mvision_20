@@ -761,8 +761,27 @@ class DisplayManager:
                 1,
             )
 
-        # Separador
+        # Calcula posição do separador
         y_sep = 115 if (analysis and analysis.occluded_mode) else 100
+
+        # Postura detectada
+        if analysis and analysis.is_standing is not None:
+            if analysis.is_standing:
+                posture_text = "PASSANTE"
+                posture_color = (0, 0, 255)    # Vermelho
+            else:
+                posture_text = "PACIENTE"
+                posture_color = (0, 255, 0)    # Verde
+            detail = ""
+            if analysis.person_bbox_aspect_ratio is not None:
+                detail += f" AR:{analysis.person_bbox_aspect_ratio:.1f}"
+            if analysis.person_bed_overlap is not None:
+                detail += f" OV:{analysis.person_bed_overlap:.0%}"
+            cv2.putText(dashboard, posture_text + detail, (10, y_sep),
+                        self.FONT, self.FONT_SCALE_SMALL, posture_color, 1)
+            y_sep += 15
+
+        # Separador
         cv2.line(dashboard, (10, y_sep), (self.dashboard_width - 10, y_sep), self.COLOR_TEXT, 1)
 
         # Pontos do corpo

@@ -412,6 +412,7 @@ def run_monitoring_loop(
             body_points = None
             analysis = None
             person_count = 0
+            person_bbox = None
 
             # Verifica se detectou pessoa com keypoints
             if len(results) > 0 and results[0].keypoints is not None:
@@ -428,8 +429,12 @@ def run_monitoring_loop(
                         else:
                             confidences = np.ones(len(keypoints))
 
+                        # Extrai bbox da pessoa do resultado YOLO-Pose
+                        if results[0].boxes is not None and len(results[0].boxes) > 0:
+                            person_bbox = tuple(results[0].boxes.xyxy[0].cpu().numpy().astype(int))
+
                         body_points = pose_analyzer.extract_body_points(keypoints, confidences)
-                        analysis = pose_analyzer.analyze_position(body_points)
+                        analysis = pose_analyzer.analyze_position(body_points, person_bbox)
 
             # Atualiza maquina de estados de pose
             pose_state = pose_fsm.update(analysis, body_points, person_count)
