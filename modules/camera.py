@@ -297,40 +297,12 @@ class CameraPicamera(CameraBase):
                 pass
             self.picam2 = None
 
-    @staticmethod
-    def _kill_camera_processes() -> None:
-        """Mata processos que possam estar segurando a camera."""
-        import subprocess
-        current_pid = os.getpid()
-        # Mata outros processos python rodando main.py (instancia anterior)
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", "python.*main.py"],
-                capture_output=True, text=True, timeout=5,
-            )
-            for line in result.stdout.strip().split("\n"):
-                if line.strip() and int(line.strip()) != current_pid:
-                    pid = int(line.strip())
-                    print(f"[Camera] Matando processo anterior (PID {pid})...")
-                    subprocess.run(["kill", "-9", str(pid)], timeout=5)
-        except Exception:
-            pass
-        # Mata processos libcamera que possam estar travados
-        try:
-            subprocess.run(["pkill", "-f", "libcamera"], capture_output=True, timeout=5)
-        except Exception:
-            pass
-
-    def open(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
+    def open(self, max_retries: int = 3, retry_delay: float = 3.0) -> bool:
         import time
         from picamera2 import Picamera2
 
         for attempt in range(1, max_retries + 1):
             try:
-                if attempt > 1:
-                    print("[Camera] Tentando liberar camera de outros processos...")
-                    self._kill_camera_processes()
-                    time.sleep(retry_delay)
                 print(f"[Camera] Inicializando Picamera2 (tentativa {attempt}/{max_retries})...")
                 self._cleanup_camera()
                 self.picam2 = Picamera2()

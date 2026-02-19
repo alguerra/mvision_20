@@ -241,6 +241,46 @@ def calibrate_bed(
     return avg_bbox
 
 
+def _kill_previous_camera_processes() -> None:
+    """
+    Mata instancias anteriores de main.py que possam estar segurando a camera.
+    Roda ANTES de qualquer inicializacao de camera.
+    """
+    import subprocess
+    my_pid = os.getpid()
+    killed = 0
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "python.*main.py"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pid = int(line)
+            except ValueError:
+                continue
+            if pid == my_pid:
+                continue
+            print(f"[Startup] Matando instancia anterior (PID {pid})...")
+            try:
+                subprocess.run(["kill", "-9", str(pid)], timeout=5)
+                killed += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if killed > 0:
+        import time
+        print(f"[Startup] {killed} processo(s) encerrado(s), aguardando liberacao da camera...")
+        time.sleep(3)
+    else:
+        print("[Startup] Nenhuma instancia anterior encontrada")
+
+
 def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayManager, AlertLogger, GPIOAlertManager]:
     """
     Inicializa todos os componentes do sistema.
@@ -266,6 +306,10 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
     print(f"Ambiente: {environment_id}")
     print(f"Plataforma: {platform_info['system']}")
     print("=" * 50)
+
+    # 0. No Linux, libera camera de processos anteriores
+    if IS_LINUX:
+        _kill_previous_camera_processes()
 
     # 1. Inicialização da câmera
     print("\n[1/4] Inicializando camera...")
