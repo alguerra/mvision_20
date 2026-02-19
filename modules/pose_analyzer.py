@@ -33,6 +33,7 @@ from config import (
     POSE_CONFIDENCE_MIN,
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
+    SITTING_ANGLE_THRESHOLD,
     TORSO_RATIO_MIN_FOR_LYING,
 )
 
@@ -133,6 +134,10 @@ class PositionAnalysis:
     person_bbox_aspect_ratio: Optional[float] = None  # height/width do bbox da pessoa
     person_bed_overlap: Optional[float] = None    # Fração do bbox da pessoa dentro da cama (0-1)
     torso_ratio: Optional[float] = None           # Dist pescoço-quadril / bbox_height
+
+    # Detecção de postura sentada (risco de queda)
+    is_sitting: Optional[bool] = None             # True = postura sentada detectada
+    torso_hip_knee_angle: Optional[float] = None  # Ângulo pescoço-quadril-joelho em graus
 
     # Contagem
     points_inside: int = 0
@@ -430,7 +435,45 @@ class PoseAnalyzer:
                 if torso_ratio < TORSO_RATIO_MIN_FOR_LYING:
                     standing_signals -= 1
 
-            analysis.is_standing = standing_signals >= 1
+            analysis.is_standing = standing_signals >= 2
+
+            # --- Detecção de postura sentada (ângulo pescoço-quadril-joelho) ---
+            # Requer: não em pé, bbox não-horizontal (AR >= 1.0), pontos com alta confiança
+            # AR < 1.0 indica pessoa deitada (bbox mais largo que alto) → pular
+            if (not analysis.is_standing and
+                    analysis.person_bbox_aspect_ratio is not None and
+                    analysis.person_bbox_aspect_ratio >= 1.0 and
+                    body_points.neck and body_points.hip_center and
+                    body_points.neck_conf >= self.confidence_high and
+                    body_points.hip_conf >= self.confidence_high):
+                # Escolhe joelho com maior confiança (requer confiança alta)
+                best_knee = None
+                best_knee_conf = 0.0
+                if body_points.left_knee and body_points.left_knee_conf >= self.confidence_high:
+                    best_knee = body_points.left_knee
+                    best_knee_conf = body_points.left_knee_conf
+                if (body_points.right_knee and
+                        body_points.right_knee_conf >= self.confidence_high and
+                        body_points.right_knee_conf > best_knee_conf):
+                    best_knee = body_points.right_knee
+
+                if best_knee is not None:
+                    # Vetores: hip→neck e hip→knee
+                    vec_neck = (body_points.neck[0] - body_points.hip_center[0],
+                                body_points.neck[1] - body_points.hip_center[1])
+                    vec_knee = (best_knee[0] - body_points.hip_center[0],
+                                best_knee[1] - body_points.hip_center[1])
+
+                    # Magnitudes
+                    mag_neck = np.sqrt(vec_neck[0]**2 + vec_neck[1]**2)
+                    mag_knee = np.sqrt(vec_knee[0]**2 + vec_knee[1]**2)
+
+                    if mag_neck > 0 and mag_knee > 0:
+                        dot = vec_neck[0] * vec_knee[0] + vec_neck[1] * vec_knee[1]
+                        cos_angle = np.clip(dot / (mag_neck * mag_knee), -1.0, 1.0)
+                        angle_deg = float(np.degrees(np.arccos(cos_angle)))
+                        analysis.torso_hip_knee_angle = angle_deg
+                        analysis.is_sitting = angle_deg <= SITTING_ANGLE_THRESHOLD
 
         # Calcula resumo
         analysis.points_inside = points_inside
@@ -620,6 +663,7 @@ class PoseStateMachineEMA:
     MONITORANDO = "MONITORANDO"
     RISCO_POTENCIAL = "RISCO_POTENCIAL"
     PACIENTE_FORA = "PACIENTE_FORA"
+    ACOMPANHADO = "ACOMPANHADO"
 
     def __init__(
         self,
@@ -683,10 +727,17 @@ class PoseStateMachineEMA:
         Returns:
             Estado atual
         """
-        # Se mais de uma pessoa, nao monitorar (acompanhado)
+        # Se mais de uma pessoa e paciente ja confirmado, transita para ACOMPANHADO
+        # Se paciente nao foi confirmado (AGUARDANDO), ignora — nao ha paciente para acompanhar
         if person_count > 1:
-            # Mantem scores mas nao altera estado - paciente acompanhado
-            self._frames_without_person = 0  # Reset contador
+            self._frames_without_person = 0
+            if self.patient_confirmed and self.current_state != self.ACOMPANHADO:
+                self.current_state = self.ACOMPANHADO
+            return self.current_state
+
+        # Saindo de ACOMPANHADO quando volta a 1 pessoa (ou 0)
+        if self.current_state == self.ACOMPANHADO:
+            self.current_state = self.MONITORANDO
             return self.current_state
 
         # Rastreia frames sem pessoa detectada
@@ -725,12 +776,13 @@ class PoseStateMachineEMA:
             analysis.hip_in_bed == False
         )
 
-        # Risco = alguns pontos fora, outros dentro (mas nao todos fora)
+        # Risco = alguns pontos fora (mas nao todos) OU postura sentada
         signal_risk = 1.0 if (
-            analysis.points_monitored > 0 and
-            analysis.any_outside_bed and
-            not analysis.all_outside_bed and
-            not core_points_outside  # Se pontos essenciais fora, nao eh risco, eh FORA
+            (analysis.points_monitored > 0 and
+             analysis.any_outside_bed and
+             not analysis.all_outside_bed and
+             not core_points_outside)  # Se pontos essenciais fora, nao eh risco, eh FORA
+            or (analysis.is_sitting is True)  # Sentado = risco mesmo com pontos na cama
         ) else 0.0
 
         # Fora = todos os pontos monitorados fora da cama OU pontos essenciais fora
@@ -739,10 +791,11 @@ class PoseStateMachineEMA:
             core_points_outside
         ) else 0.0
 
-        # Seguro = todos os pontos dentro da cama
+        # Seguro = todos os pontos dentro da cama E nao sentado
         signal_safe = 1.0 if (
             analysis.points_monitored > 0 and
-            analysis.all_monitored_in_bed
+            analysis.all_monitored_in_bed and
+            not (analysis.is_sitting is True)  # Nao eh seguro se sentado
         ) else 0.0
 
         # Override de sinais em modo ocluso (pescoco+ombros visiveis, quadris nao)

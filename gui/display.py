@@ -646,6 +646,7 @@ class DisplayManager:
             PatientPoseState.MONITORANDO: "Paciente em monitoramento",
             PatientPoseState.RISCO_POTENCIAL: "ATENCAO: Risco de queda",
             PatientPoseState.PACIENTE_FORA: "ALERTA: Paciente fora da cama!",
+            PatientPoseState.ACOMPANHADO: "Paciente acompanhado",
         }
 
         colors = StateMachine.POSE_STATE_COLORS
@@ -779,6 +780,19 @@ class DisplayManager:
                 detail += f" OV:{analysis.person_bed_overlap:.0%}"
             cv2.putText(dashboard, posture_text + detail, (10, y_sep),
                         self.FONT, self.FONT_SCALE_SMALL, posture_color, 1)
+            y_sep += 15
+
+        # Postura sentada (ângulo)
+        if analysis and analysis.torso_hip_knee_angle is not None:
+            angle_val = analysis.torso_hip_knee_angle
+            if analysis.is_sitting:
+                sit_text = f"SENTADO {angle_val:.0f}deg"
+                sit_color = (0, 165, 255)   # Laranja
+            else:
+                sit_text = f"Angulo: {angle_val:.0f}deg"
+                sit_color = (0, 255, 0)     # Verde
+            cv2.putText(dashboard, sit_text, (10, y_sep),
+                        self.FONT, self.FONT_SCALE_SMALL, sit_color, 1)
             y_sep += 15
 
         # Separador

@@ -1,9 +1,11 @@
 {
   "bbox": [
-    199,
-    149,
-    472,
-    476
+    144,
+    137,
+    359,
+    468
   ],
-  "timestamp": 1770472791.8981533
+  "timestamp": 1771510929.8292222,
+  "detected_class": "bed",
+  "detected_strategy": "primary"
 }

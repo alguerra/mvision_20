@@ -39,6 +39,7 @@ EMA_THRESHOLD_PATIENT_LOST = 0.15     # Score para considerar paciente perdido (
 PERSON_BBOX_ASPECT_RATIO_UPRIGHT = 1.6   # height/width do bbox: acima = em pé (1.6 para incluir crianças/corpo parcial)
 PERSON_BED_OVERLAP_MAX_STANDING = 0.5    # Sobreposição pessoa↔cama: abaixo = provavelmente em pé
 TORSO_RATIO_MIN_FOR_LYING = 0.15         # Dist pescoço-quadril / bbox_height: abaixo = foreshortened (deitado)
+SITTING_ANGLE_THRESHOLD = 120            # Ângulo pescoço-quadril-joelho abaixo = sentado (risco)
 
 # Índices dos keypoints COCO format (YOLOv8-Pose)
 KP_LEFT_SHOULDER = 5
@@ -60,7 +61,28 @@ CAMERA_BACKEND = "DSHOW"
 YOLO_CLASS_PERSON = 0
 
 # Nomes das classes COCO para detectar cama (resolução dinâmica por nome)
-BED_CLASS_NAMES = ["bed", "couch"]
+BED_CLASS_NAMES = ["bed"]
+
+# Modelo dedicado para detecção de cama (yolov8l.pt = necessário para cama frontal à câmera)
+# yolov8s não reconhece cama hospitalar neste ângulo; yolov8l detecta com conf ~0.60-0.70
+# OK pois roda só na calibração, não impacta o loop principal
+YOLO_BED_MODEL = "yolov8l.pt"
+
+# Estratégia 1 (primária): classes mais prováveis
+BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
+# Estratégia 2 (secundária): inclui bench (macas metálicas simples)
+BED_CLASS_NAMES_SECONDARY = ["bed", "couch", "bench"]
+
+# Confiança mínima por estratégia
+BED_DETECTION_CONF_PRIMARY = 0.25
+BED_DETECTION_CONF_SECONDARY = 0.15
+BED_DETECTION_CONF_FALLBACK = 0.10   # Só para diagnóstico (não retorna detecção)
+
+# Área mínima da detecção em relação ao frame (filtra objetos pequenos)
+BED_MIN_AREA_RATIO = 0.03
+
+# Log diagnóstico detalhado durante calibração
+BED_DETECTION_DIAGNOSTIC = True
 
 # Thresholds para transições de estado
 THRESHOLD_REL_HEIGHT_SITTING = 0.6  # Altura relativa indicando paciente sentando
@@ -68,7 +90,7 @@ THRESHOLD_DELTA_Y_ALERT = 5.0  # Velocidade vertical para estado de alerta
 THRESHOLD_OUTSIDE_BED_MARGIN = 0.1  # Margem para considerar paciente fora da cama
 
 # Calibração do sistema
-CALIBRATION_FRAMES = 20              # Quadros para calibração (configurável)
+CALIBRATION_FRAMES = 10             # Quadros para calibração (configurável)
 CALIBRATION_MAX_VARIANCE = 15        # Variação máxima em pixels para considerar estável
 CALIBRATION_SUCCESS_DISPLAY_SECONDS = 3  # Tempo para mostrar "Configuração concluída"
 CALIBRATION_MIN_DETECTION_RATE = 0.8  # Mínimo 80% de detecções para calibração válida

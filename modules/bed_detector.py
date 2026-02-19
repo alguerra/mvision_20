@@ -1,25 +1,37 @@
 """
 Módulo de autodetecção da cama hospitalar.
-Utiliza YOLOv8 para detectar a cama e persiste coordenadas para re-uso.
+Utiliza YOLOv8 com detecção multi-estratégia e persiste coordenadas para re-uso.
+
+Estratégias de detecção (em ordem de prioridade):
+  1. Primary: classes "bed", "couch" com confiança >= 0.25
+  2. Secondary: classes "bed", "couch", "bench" com confiança >= 0.15
+  3. Exploratory: mesmas classes com confiança >= 0.10 (apenas diagnóstico, não retorna)
 """
 
 import json
 import os
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from config import (
     BED_CLASS_NAMES,
+    BED_CLASS_NAMES_PRIMARY,
+    BED_CLASS_NAMES_SECONDARY,
+    BED_DETECTION_CONF_FALLBACK,
+    BED_DETECTION_CONF_PRIMARY,
+    BED_DETECTION_CONF_SECONDARY,
+    BED_DETECTION_DIAGNOSTIC,
+    BED_MIN_AREA_RATIO,
     BED_RECHECK_INTERVAL_HOURS,
     BED_REFERENCE_PATH,
 )
 
 
 class BedDetector:
-    """Detector de cama hospitalar usando YOLOv8."""
+    """Detector de cama hospitalar usando YOLOv8 com múltiplas estratégias."""
 
     def __init__(self, yolo_model):
         """
@@ -33,33 +45,91 @@ class BedDetector:
         self.last_detection_time: Optional[float] = None
         self.reference_path = Path(BED_REFERENCE_PATH)
         self.detected_class_name: Optional[str] = None
+        self.detected_strategy: Optional[str] = None
 
-        # Resolve nomes de classes para índices
-        self.bed_class_indices = self._get_class_indices()
+        # Resolve nomes de classes para índices (legado, para recheck)
+        self.bed_class_indices = self._resolve_class_names(BED_CLASS_NAMES)
+
+        # Constrói estratégias de detecção
+        self.strategies = self._build_strategies()
 
         # Tenta carregar referência salva
         self.load_reference()
 
-    def _get_class_indices(self) -> list:
+    def _resolve_class_names(self, class_names: list) -> list:
         """
         Resolve nomes de classes para índices usando model.names.
 
+        Args:
+            class_names: Lista de nomes de classes a resolver.
+
         Returns:
-            Lista de índices correspondentes aos nomes em BED_CLASS_NAMES.
+            Lista de índices correspondentes aos nomes fornecidos.
         """
         indices = []
-        target_names = [n.lower() for n in BED_CLASS_NAMES]
+        target_names = [n.lower() for n in class_names]
 
         # model.names é um dict {0: 'person', 1: 'bicycle', ..., 59: 'bed', ...}
         for idx, name in self.model.names.items():
             if name.lower() in target_names:
                 indices.append(idx)
-                print(f"[BedDetector] Classe '{name}' mapeada para índice {idx}")
-
-        if not indices:
-            print(f"[BedDetector] AVISO: Nenhuma classe encontrada para {BED_CLASS_NAMES}")
 
         return indices
+
+    def _build_strategies(self) -> List[Dict]:
+        """
+        Constrói lista ordenada de estratégias de detecção.
+
+        Cada estratégia tem: nome, índices de classe, threshold de confiança,
+        e flag indicando se retorna detecção ou apenas loga.
+
+        Returns:
+            Lista de dicts com estratégias ordenadas por prioridade.
+        """
+        strategies = []
+
+        # Estratégia 1: Primary (bed, couch)
+        primary_indices = self._resolve_class_names(BED_CLASS_NAMES_PRIMARY)
+        if primary_indices:
+            strategies.append({
+                "name": "primary",
+                "class_names": BED_CLASS_NAMES_PRIMARY,
+                "class_indices": primary_indices,
+                "conf": BED_DETECTION_CONF_PRIMARY,
+                "returns_detection": True,
+            })
+
+        # Estratégia 2: Secondary (bed, couch, bench)
+        secondary_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
+        if secondary_indices:
+            strategies.append({
+                "name": "secondary",
+                "class_names": BED_CLASS_NAMES_SECONDARY,
+                "class_indices": secondary_indices,
+                "conf": BED_DETECTION_CONF_SECONDARY,
+                "returns_detection": True,
+            })
+
+        # Estratégia 3: Exploratory (apenas diagnóstico)
+        exploratory_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
+        if exploratory_indices:
+            strategies.append({
+                "name": "exploratory",
+                "class_names": BED_CLASS_NAMES_SECONDARY,
+                "class_indices": exploratory_indices,
+                "conf": BED_DETECTION_CONF_FALLBACK,
+                "returns_detection": False,
+            })
+
+        # Log das estratégias configuradas
+        for s in strategies:
+            names_str = ", ".join(s["class_names"])
+            indices_str = ", ".join(str(i) for i in s["class_indices"])
+            print(f"[BedDetector] Estrategia '{s['name']}': classes=[{names_str}] "
+                  f"indices=[{indices_str}] conf>={s['conf']} "
+                  f"retorna={'sim' if s['returns_detection'] else 'nao (diagnostico)'}")
+
+        return strategies
 
     def _calculate_bed_score(
         self,
@@ -118,10 +188,6 @@ class BedDetector:
             edge_penalty += 0.3
 
         # Score final: combinação ponderada
-        # - Área tem peso maior (cama principal geralmente é a maior e mais visível)
-        # - Centralização ajuda a desempatar
-        # - Confiança do YOLO ainda é considerada
-        # - Penalidade forte para camas parcialmente visíveis
         final_score = (
             area_score * 0.45 +
             center_score * 0.30 +
@@ -130,59 +196,164 @@ class BedDetector:
 
         return final_score
 
-    def detect_bed(self, frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+    def _select_best_detection(
+        self,
+        boxes,
+        frame_height: int,
+        frame_width: int,
+    ) -> Optional[Tuple[Tuple[int, int, int, int], str, float, float]]:
         """
-        Executa inferência buscando classes de cama no frame.
+        Filtra por área mínima e seleciona a melhor detecção.
 
-        Quando múltiplas camas são detectadas, seleciona a mais adequada
-        baseando-se em área, centralização e visibilidade completa no frame.
+        Args:
+            boxes: Resultados de detecção YOLO (boxes).
+            frame_height: Altura do frame.
+            frame_width: Largura do frame.
+
+        Returns:
+            Tuple (bbox, class_name, confidence, score) ou None.
+        """
+        frame_area = frame_height * frame_width
+        best_score = -1
+        best_result = None
+
+        for i in range(len(boxes)):
+            bbox = boxes.xyxy[i].cpu().numpy()
+            confidence = float(boxes.conf[i])
+            x1, y1, x2, y2 = bbox
+
+            # Filtra detecções menores que área mínima
+            det_area = (x2 - x1) * (y2 - y1)
+            area_ratio = det_area / frame_area
+            if area_ratio < BED_MIN_AREA_RATIO:
+                continue
+
+            score = self._calculate_bed_score(
+                bbox, frame_height, frame_width, confidence
+            )
+
+            if score > best_score:
+                best_score = score
+                class_id = int(boxes.cls[i])
+                class_name = self.model.names[class_id]
+                best_result = (
+                    tuple(bbox.astype(int)),
+                    class_name,
+                    confidence,
+                    score,
+                )
+
+        return best_result
+
+    def _log_detections(
+        self,
+        strategy_name: str,
+        boxes,
+        frame_height: int,
+        frame_width: int,
+    ) -> None:
+        """
+        Loga detalhes de cada detecção para diagnóstico.
+
+        Args:
+            strategy_name: Nome da estratégia usada.
+            boxes: Resultados de detecção YOLO (boxes).
+            frame_height: Altura do frame.
+            frame_width: Largura do frame.
+        """
+        frame_area = frame_height * frame_width
+
+        if len(boxes) == 0:
+            print(f"    [{strategy_name}] Nenhuma deteccao")
+            return
+
+        for i in range(len(boxes)):
+            bbox = boxes.xyxy[i].cpu().numpy()
+            confidence = float(boxes.conf[i])
+            class_id = int(boxes.cls[i])
+            class_name = self.model.names[class_id]
+
+            x1, y1, x2, y2 = bbox
+            det_area = (x2 - x1) * (y2 - y1)
+            area_pct = (det_area / frame_area) * 100
+
+            score = self._calculate_bed_score(
+                bbox, frame_height, frame_width, confidence
+            )
+
+            bbox_str = f"({int(x1)},{int(y1)},{int(x2)},{int(y2)})"
+            print(f"    [{strategy_name}] {class_name}: conf={confidence:.3f} "
+                  f"bbox={bbox_str} area={area_pct:.1f}% score={score:.3f}")
+
+    def detect_bed(
+        self,
+        frame: np.ndarray,
+        diagnostic: bool = False,
+    ) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Executa detecção multi-estratégia buscando cama no frame.
+
+        Itera pelas estratégias em ordem de prioridade. Para cada uma,
+        executa inferência com as classes e threshold correspondentes.
+        Na estratégia exploratória, apenas loga (não retorna detecção).
 
         Args:
             frame: Frame de vídeo (numpy array BGR).
+            diagnostic: Se True, força log detalhado de todas as detecções.
 
         Returns:
             Tuple (x1, y1, x2, y2) com coordenadas da cama ou None se não detectada.
         """
-        if not self.bed_class_indices:
+        if not self.strategies:
             return None
 
-        results = self.model.predict(frame, classes=self.bed_class_indices, verbose=False)
+        frame_height, frame_width = frame.shape[:2]
+        do_log = diagnostic or BED_DETECTION_DIAGNOSTIC
 
-        if len(results) > 0 and len(results[0].boxes) > 0:
-            boxes = results[0].boxes
-            frame_height, frame_width = frame.shape[:2]
+        for strategy in self.strategies:
+            results = self.model.predict(
+                frame,
+                classes=strategy["class_indices"],
+                conf=strategy["conf"],
+                verbose=False,
+            )
 
-            # Calcula score para cada cama detectada
-            best_score = -1
-            best_idx = 0
+            has_detections = (
+                len(results) > 0 and len(results[0].boxes) > 0
+            )
 
-            for i in range(len(boxes)):
-                bbox = boxes.xyxy[i].cpu().numpy()
-                confidence = float(boxes.conf[i])
-
-                score = self._calculate_bed_score(
-                    bbox, frame_height, frame_width, confidence
+            if do_log and has_detections:
+                self._log_detections(
+                    strategy["name"],
+                    results[0].boxes,
+                    frame_height,
+                    frame_width,
                 )
+            elif do_log and not has_detections:
+                print(f"    [{strategy['name']}] Nenhuma deteccao")
 
-                if score > best_score:
-                    best_score = score
-                    best_idx = i
+            if has_detections and strategy["returns_detection"]:
+                best = self._select_best_detection(
+                    results[0].boxes, frame_height, frame_width
+                )
+                if best is not None:
+                    bbox, class_name, confidence, score = best
+                    self.detected_class_name = class_name
+                    self.detected_strategy = strategy["name"]
+                    self.bed_bbox = bbox
+                    self.last_detection_time = time.time()
 
-            bbox = boxes.xyxy[best_idx].cpu().numpy().astype(int)
+                    if do_log:
+                        print(f"    >>> Selecionada: {class_name} via estrategia "
+                              f"'{strategy['name']}' (conf={confidence:.3f}, score={score:.3f})")
 
-            # Guarda o nome da classe detectada
-            class_id = int(boxes.cls[best_idx])
-            self.detected_class_name = self.model.names[class_id]
-
-            self.bed_bbox = tuple(bbox)
-            self.last_detection_time = time.time()
-            return self.bed_bbox
+                    return self.bed_bbox
 
         return None
 
     def save_reference(self, bbox: Tuple[int, int, int, int]) -> None:
         """
-        Persiste coordenadas da cama em arquivo JSON.
+        Persiste coordenadas da cama em arquivo JSON com metadados.
 
         Args:
             bbox: Tuple (x1, y1, x2, y2) com coordenadas.
@@ -193,6 +364,8 @@ class BedDetector:
         data = {
             "bbox": [int(v) for v in bbox],
             "timestamp": time.time(),
+            "detected_class": self.detected_class_name,
+            "detected_strategy": self.detected_strategy,
         }
 
         with open(self.reference_path, "w") as f:
@@ -217,6 +390,9 @@ class BedDetector:
 
             self.bed_bbox = tuple(data["bbox"])
             self.last_detection_time = data.get("timestamp", time.time())
+            # Carrega metadados se disponíveis (backward-compatible)
+            self.detected_class_name = data.get("detected_class")
+            self.detected_strategy = data.get("detected_strategy")
             return self.bed_bbox
 
         except (json.JSONDecodeError, KeyError):

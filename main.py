@@ -10,6 +10,7 @@ Estados do paciente:
     MONITORANDO - Paciente na cama, monitoramento ativo
     RISCO_POTENCIAL - Partes do corpo fora da cama
     PACIENTE_FORA - Paciente completamente fora da cama
+    ACOMPANHADO - Mais de uma pessoa detectada, paciente acompanhado
 
 Controles:
     Q - Sair do programa
@@ -57,6 +58,7 @@ from config import (
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
     WINDOW_NAME,
+    YOLO_BED_MODEL,
     YOLO_MODEL,
     YOLO_POSE_CONFIDENCE,
     YOLO_POSE_MODEL,
@@ -195,7 +197,7 @@ def calibrate_bed(
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
 
-            bbox = bed_detector.detect_bed(frame)
+            bbox = bed_detector.detect_bed(frame, diagnostic=True)
 
             if bbox:
                 detections.append(bbox)
@@ -222,6 +224,7 @@ def calibrate_bed(
     min_detections = int(num_frames * CALIBRATION_MIN_DETECTION_RATE)
     if len(detections) < min_detections:
         print(f"    Calibracao falhou: apenas {len(detections)}/{num_frames} deteccoes")
+        print(f"    Dica: verifique os logs de diagnostico acima para ver o que o YOLO detectou")
         return None
 
     # Calcula variância
@@ -279,8 +282,8 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
 
     # 2. Carrega modelos YOLO
     print("\n[2/4] Carregando modelos YOLO...")
-    yolo = YOLO(YOLO_MODEL)
-    print(f"    Modelo {YOLO_MODEL} carregado (deteccao de cama)")
+    yolo = YOLO(YOLO_BED_MODEL)
+    print(f"    Modelo {YOLO_BED_MODEL} carregado (deteccao de cama)")
 
     yolo_pose = YOLO(YOLO_POSE_MODEL)
     print(f"    Modelo {YOLO_POSE_MODEL} carregado (pose)")
@@ -452,7 +455,7 @@ def run_monitoring_loop(
             frame = display.draw_pose_state_message(frame, pose_state_enum)
 
             status = monitor.get_status()
-            if person_count > 1:
+            if pose_state_enum == PatientPoseState.ACOMPANHADO:
                 status_text = f"STATUS: {status} | PESSOAS: {person_count} (acompanhado)"
             elif pose_state_enum == PatientPoseState.PACIENTE_FORA:
                 status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - ALERTA CRITICO!"
@@ -484,9 +487,8 @@ def run_monitoring_loop(
                 # Controle de alerta GPIO
                 if pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
                     gpio_manager.start_risk_alert()
-                elif pose_state == PoseStateMachineEMA.MONITORANDO:
-                    # So para o alerta se paciente VOLTOU para a cama
-                    # Se foi para AGUARDANDO (desapareceu), deixa o alerta completar o ciclo
+                elif pose_state in [PoseStateMachineEMA.MONITORANDO, PoseStateMachineEMA.ACOMPANHADO]:
+                    # Para o alerta se paciente VOLTOU para a cama ou esta acompanhado
                     gpio_manager.stop_risk_alert()
 
                 previous_pose_state = pose_state

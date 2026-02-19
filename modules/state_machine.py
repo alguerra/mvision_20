@@ -31,6 +31,7 @@ class PatientPoseState(Enum):
     MONITORANDO = "MONITORANDO"        # Paciente na cama, monitoramento ativo
     RISCO_POTENCIAL = "RISCO_POTENCIAL"  # Partes do corpo fora da cama
     PACIENTE_FORA = "PACIENTE_FORA"    # Paciente fora da cama (critico)
+    ACOMPANHADO = "ACOMPANHADO"        # Mais de uma pessoa, paciente acompanhado
 
 
 class StateMachine:
@@ -50,6 +51,7 @@ class StateMachine:
         PatientPoseState.MONITORANDO: (0, 255, 0),       # Verde - normal
         PatientPoseState.RISCO_POTENCIAL: (0, 165, 255), # Laranja - atencao
         PatientPoseState.PACIENTE_FORA: (0, 0, 255),     # Vermelho - critico
+        PatientPoseState.ACOMPANHADO: (255, 200, 0),     # Azul claro - acompanhado
     }
 
     # Thresholds para transições de estado
