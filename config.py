@@ -75,9 +75,9 @@ BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
 BED_CLASS_NAMES_SECONDARY = ["bed", "couch", "bench"]
 
 # Confiança mínima por estratégia
-BED_DETECTION_CONF_PRIMARY = 0.25
-BED_DETECTION_CONF_SECONDARY = 0.15
-BED_DETECTION_CONF_FALLBACK = 0.10   # Só para diagnóstico (não retorna detecção)
+BED_DETECTION_CONF_PRIMARY = 0.15
+BED_DETECTION_CONF_SECONDARY = 0.10
+BED_DETECTION_CONF_FALLBACK = 0.05   # Só para diagnóstico (não retorna detecção)
 
 # Área mínima da detecção em relação ao frame (filtra objetos pequenos)
 BED_MIN_AREA_RATIO = 0.03
@@ -91,10 +91,10 @@ THRESHOLD_DELTA_Y_ALERT = 5.0  # Velocidade vertical para estado de alerta
 THRESHOLD_OUTSIDE_BED_MARGIN = 0.1  # Margem para considerar paciente fora da cama
 
 # Calibração do sistema
-CALIBRATION_FRAMES = 10             # Quadros para calibração (configurável)
+CALIBRATION_FRAMES = 20              # Quadros para calibração (mais frames = mais chances)
 CALIBRATION_MAX_VARIANCE = 15        # Variação máxima em pixels para considerar estável
 CALIBRATION_SUCCESS_DISPLAY_SECONDS = 3  # Tempo para mostrar "Configuração concluída"
-CALIBRATION_MIN_DETECTION_RATE = 0.8  # Mínimo 80% de detecções para calibração válida
+CALIBRATION_MIN_DETECTION_RATE = 0.3  # Mínimo 30% de detecções (yolov8s detecta em poucos frames)
 
 # Controle de FPS
 FRAME_DELAY_SECONDS = 0.2            # Sleep entre frames (5 FPS)
