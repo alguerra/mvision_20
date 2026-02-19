@@ -63,10 +63,11 @@ YOLO_CLASS_PERSON = 0
 # Nomes das classes COCO para detectar cama (resolução dinâmica por nome)
 BED_CLASS_NAMES = ["bed"]
 
-# Modelo dedicado para detecção de cama (yolov8l.pt = necessário para cama frontal à câmera)
-# yolov8s não reconhece cama hospitalar neste ângulo; yolov8l detecta com conf ~0.60-0.70
-# OK pois roda só na calibração, não impacta o loop principal
-YOLO_BED_MODEL = "yolov8l.pt"
+# Modelo dedicado para detecção de cama (só roda na calibração, não impacta loop principal)
+# Windows: yolov8l.pt (necessário para cama frontal à câmera, ~84MB)
+# Raspberry Pi: yolov8s.pt (yolov8l é muito pesado para ARM)
+import platform as _platform
+YOLO_BED_MODEL = "yolov8l.pt" if _platform.system() == "Windows" else "yolov8s.pt"
 
 # Estratégia 1 (primária): classes mais prováveis
 BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
