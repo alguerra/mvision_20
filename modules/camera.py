@@ -284,25 +284,47 @@ class CameraPicamera(CameraBase):
         self._consecutive_errors = 0
         self._max_errors_before_restart = 5
 
-    def open(self) -> bool:
-        try:
-            from picamera2 import Picamera2
+    def _cleanup_camera(self) -> None:
+        """Libera recursos da camera para permitir re-inicializacao."""
+        if self.picam2 is not None:
+            try:
+                self.picam2.stop()
+            except Exception:
+                pass
+            try:
+                self.picam2.close()
+            except Exception:
+                pass
+            self.picam2 = None
 
-            print("[Camera] Inicializando Picamera2...")
-            self.picam2 = Picamera2()
-            config = self.picam2.create_preview_configuration(
-                main={"size": (self.width, self.height), "format": "RGB888"}
-            )
-            self.picam2.configure(config)
-            self.picam2.start()
-            self._is_open = True
-            self._consecutive_errors = 0
-            print("[Camera] Picamera2 inicializada com sucesso")
-            return True
-        except Exception as e:
-            print(f"[Camera] Erro ao inicializar Picamera2: {e}")
-            self._is_open = False
-            return False
+    def open(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
+        import time
+        from picamera2 import Picamera2
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"[Camera] Inicializando Picamera2 (tentativa {attempt}/{max_retries})...")
+                self._cleanup_camera()
+                self.picam2 = Picamera2()
+                config = self.picam2.create_preview_configuration(
+                    main={"size": (self.width, self.height), "format": "RGB888"}
+                )
+                self.picam2.configure(config)
+                self.picam2.start()
+                self._is_open = True
+                self._consecutive_errors = 0
+                print("[Camera] Picamera2 inicializada com sucesso")
+                return True
+            except Exception as e:
+                print(f"[Camera] Erro na tentativa {attempt}: {e}")
+                self._cleanup_camera()
+                if attempt < max_retries:
+                    print(f"[Camera] Aguardando {retry_delay}s antes de tentar novamente...")
+                    time.sleep(retry_delay)
+
+        print("[Camera] Falha ao inicializar Picamera2 apos todas as tentativas")
+        self._is_open = False
+        return False
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         if not self._is_open or self.picam2 is None:
