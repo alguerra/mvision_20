@@ -404,8 +404,9 @@ def run_monitoring_loop(
     # Controle de heartbeat
     last_heartbeat = time.time()
 
-    # Controle de erros consecutivos
-    consecutive_errors = 0
+    # Controle de erros consecutivos (separados por tipo)
+    consecutive_capture_errors = 0
+    consecutive_processing_errors = 0
 
     # Log inicio do monitoramento
     alert_logger.log_info("Sistema de monitoramento iniciado")
@@ -420,19 +421,19 @@ def run_monitoring_loop(
 
             ret, frame = camera.read()
             if not ret or frame is None:
-                consecutive_errors += 1
-                if consecutive_errors <= 5 or consecutive_errors % 10 == 0:
-                    logger.warning(f"Falha ao capturar frame ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS})")
+                consecutive_capture_errors += 1
+                if consecutive_capture_errors <= 5 or consecutive_capture_errors % 10 == 0:
+                    logger.warning(f"Falha ao capturar frame ({consecutive_capture_errors}/{MAX_CONSECUTIVE_ERRORS})")
 
-                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                if consecutive_capture_errors >= MAX_CONSECUTIVE_ERRORS:
                     logger.error("Muitos erros consecutivos de captura - tentando reiniciar sistema")
                     return False
 
                 time.sleep(ERROR_RECOVERY_DELAY)
                 continue
 
-            # Reset contador de erros em sucesso
-            consecutive_errors = 0
+            # Reset contadores em captura bem-sucedida
+            consecutive_capture_errors = 0
 
             # Aplica flip horizontal se configurado
             if FLIP_HORIZONTAL:
@@ -531,8 +532,8 @@ def run_monitoring_loop(
                 # Controle de alerta GPIO
                 if pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
                     gpio_manager.start_risk_alert()
-                elif pose_state in [PoseStateMachineEMA.MONITORANDO, PoseStateMachineEMA.ACOMPANHADO]:
-                    # Para o alerta se paciente VOLTOU para a cama ou esta acompanhado
+                else:
+                    # Para o alerta em qualquer outro estado (MONITORANDO, ACOMPANHADO, AGUARDANDO)
                     gpio_manager.stop_risk_alert()
 
                 previous_pose_state = pose_state
@@ -556,6 +557,9 @@ def run_monitoring_loop(
                 pose_fsm.reset()
                 logger.info("Maquina de estados resetada")
 
+            # Frame processado com sucesso — reset contador de erros de processamento
+            consecutive_processing_errors = 0
+
             time.sleep(FRAME_DELAY_SECONDS)
 
         except KeyboardInterrupt:
@@ -563,11 +567,11 @@ def run_monitoring_loop(
             return True
 
         except Exception as e:
-            consecutive_errors += 1
-            log_exception(f"Erro no loop principal ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS})", e)
+            consecutive_processing_errors += 1
+            log_exception(f"Erro de processamento ({consecutive_processing_errors}/{MAX_CONSECUTIVE_ERRORS})", e)
 
-            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                logger.error("Muitos erros consecutivos - reiniciando sistema")
+            if consecutive_processing_errors >= MAX_CONSECUTIVE_ERRORS:
+                logger.error("Muitos erros de processamento consecutivos - reiniciando sistema")
                 return False
 
             time.sleep(ERROR_RECOVERY_DELAY)

@@ -770,7 +770,10 @@ class PoseStateMachineEMA:
             return self.current_state
 
         # Saindo de ACOMPANHADO quando volta a 1 pessoa (ou 0)
+        # Decai scores para evitar transicao falsa por valores congelados
+        # durante ACOMPANHADO (scores nao foram atualizados enquanto person_count > 1)
         if self.current_state == self.ACOMPANHADO:
+            self._decay_all_scores()
             self.current_state = self.MONITORANDO
             return self.current_state
 
@@ -917,6 +920,17 @@ class PoseStateMachineEMA:
         # Criterio: nenhuma pessoa detectada por varios frames consecutivos
         patient_lost = self._frames_without_person >= self._frames_to_lose_patient
 
+        # Detecta dados insuficientes: todos os scores decairam mas nenhum
+        # sinal positivo esta sendo recebido (keypoints fracos ou deteccao ruidosa).
+        # Sem isso, RISCO_POTENCIAL/PACIENTE_FORA ficam em deadlock porque
+        # a condicao de saida exige score_safe > threshold, que nunca sobe sem sinal.
+        insufficient_data = (
+            self.score_risk < 0.1 and
+            self.score_out < 0.1 and
+            self.score_safe < 0.1 and
+            self.score_patient_visible < 0.2
+        )
+
         # Estado PACIENTE_FORA
         if self.current_state == self.PACIENTE_FORA:
             # So volta para AGUARDANDO se paciente desaparecer completamente
@@ -931,6 +945,9 @@ class PoseStateMachineEMA:
             # Ou se entrar em risco parcial
             elif self.score_out < self.threshold_exit_out and self.score_risk >= self.threshold_enter_risk:
                 self.current_state = self.RISCO_POTENCIAL
+            # Escape: dados insuficientes por tempo prolongado
+            elif insufficient_data:
+                self.current_state = self.MONITORANDO
             return
 
         # Estado RISCO_POTENCIAL
@@ -947,6 +964,9 @@ class PoseStateMachineEMA:
             # Volta para MONITORANDO apenas se risco diminuir E seguro aumentar significativamente
             elif self.score_risk < self.threshold_exit_risk and self.score_safe > self.threshold_exit_risk:
                 self.current_state = self.MONITORANDO
+            # Escape: dados insuficientes por tempo prolongado
+            elif insufficient_data:
+                self.current_state = self.MONITORANDO
             return
 
         # Estado MONITORANDO
@@ -957,11 +977,12 @@ class PoseStateMachineEMA:
                 self.patient_confirmed = False
                 return
 
-            # Entra em PACIENTE_FORA (prioridade maior - todos pontos fora)
-            if self.score_out >= self.threshold_enter_out:
-                self.current_state = self.PACIENTE_FORA
-            # Entra em RISCO_POTENCIAL (alguns pontos fora)
-            elif self.score_risk >= self.threshold_enter_risk:
+            # Entra em RISCO_POTENCIAL (alguns pontos fora ou sentado)
+            if self.score_risk >= self.threshold_enter_risk:
+                self.current_state = self.RISCO_POTENCIAL
+            # Entra em PACIENTE_FORA apenas se ja passou por RISCO_POTENCIAL
+            # (evita salto direto MONITORANDO->PACIENTE_FORA em 2 frames)
+            elif self.score_out >= self.threshold_enter_out:
                 self.current_state = self.RISCO_POTENCIAL
             return
 
