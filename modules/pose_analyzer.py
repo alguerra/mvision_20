@@ -31,6 +31,8 @@ from config import (
     KP_RIGHT_HIP,
     KP_RIGHT_KNEE,
     KP_RIGHT_SHOULDER,
+    LYING_MAX_ASPECT_RATIO,
+    NECK_ABOVE_BED_SITTING_RATIO,
     PERSON_BBOX_ASPECT_RATIO_UPRIGHT,
     PERSON_BED_OVERLAP_MAX_STANDING,
     POSE_CONFIDENCE_HIGH,
@@ -38,6 +40,7 @@ from config import (
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
     SITTING_ANGLE_THRESHOLD,
+    SITTING_MIN_ASPECT_RATIO,
     TORSO_RATIO_MIN_FOR_LYING,
 )
 
@@ -142,6 +145,10 @@ class PositionAnalysis:
     # Detecção de postura sentada (risco de queda)
     is_sitting: Optional[bool] = None             # True = postura sentada detectada
     torso_hip_knee_angle: Optional[float] = None  # Ângulo pescoço-quadril-joelho em graus
+    neck_above_bed_ratio: Optional[float] = None  # Quanto acima do topo da cama (fallback sitting)
+
+    # Detecção explícita de deitado
+    is_lying: Optional[bool] = None               # True = postura deitada detectada
 
     # Contagem
     points_inside: int = 0
@@ -441,11 +448,11 @@ class PoseAnalyzer:
             analysis.is_standing = standing_signals >= 2
 
             # --- Detecção de postura sentada (ângulo pescoço-quadril-joelho) ---
-            # Requer: não em pé, bbox não-horizontal (AR >= 1.0), pontos com alta confiança
-            # AR < 1.0 indica pessoa deitada (bbox mais largo que alto) → pular
+            # Requer: não em pé, bbox não-horizontal (AR >= 0.7), pontos com alta confiança
+            # AR < 0.7 indica pessoa deitada (bbox mais largo que alto) → pular
             if (not analysis.is_standing and
                     analysis.person_bbox_aspect_ratio is not None and
-                    analysis.person_bbox_aspect_ratio >= 1.0 and
+                    analysis.person_bbox_aspect_ratio >= SITTING_MIN_ASPECT_RATIO and
                     body_points.neck and body_points.hip_center and
                     body_points.neck_conf >= self.confidence_high and
                     body_points.hip_conf >= self.confidence_high):
@@ -477,6 +484,30 @@ class PoseAnalyzer:
                         angle_deg = float(np.degrees(np.arccos(cos_angle)))
                         analysis.torso_hip_knee_angle = angle_deg
                         analysis.is_sitting = angle_deg <= SITTING_ANGLE_THRESHOLD
+
+            # --- Fallback: sentado por altura do pescoço (cobre quadril ocluso) ---
+            if (analysis.is_sitting is None and
+                    not (analysis.is_standing is True) and
+                    body_points.neck and body_points.neck_conf >= self.confidence_high):
+                bed_y1 = self.bed_bbox[1]
+                bed_height = self.bed_bbox[3] - self.bed_bbox[1]
+                neck_y = body_points.neck[1]
+                if bed_height > 0:
+                    above_ratio = (bed_y1 - neck_y) / bed_height  # Positivo = acima
+                    analysis.neck_above_bed_ratio = above_ratio
+                    if above_ratio > NECK_ABOVE_BED_SITTING_RATIO:
+                        analysis.is_sitting = True
+
+            # --- Detecção explícita de deitado ---
+            if (not (analysis.is_standing is True) and
+                    not (analysis.is_sitting is True) and
+                    person_bbox is not None):
+                if (analysis.person_bbox_aspect_ratio is not None and
+                        analysis.person_bbox_aspect_ratio < LYING_MAX_ASPECT_RATIO):
+                    analysis.is_lying = True
+                elif (analysis.torso_ratio is not None and
+                        analysis.torso_ratio < TORSO_RATIO_MIN_FOR_LYING):
+                    analysis.is_lying = True
 
         # Calcula resumo
         analysis.points_inside = points_inside
@@ -808,6 +839,7 @@ class PoseStateMachineEMA:
             signal_out = 0.0
             signal_risk = 0.0
             signal_patient_in_bed = 0.0
+            signal_safe = 0.0
 
         # Override de sinais em modo ocluso (pescoco+ombros visiveis, quadris nao)
         if analysis.occluded_mode and not analysis.core_points_visible:

@@ -770,6 +770,9 @@ class DisplayManager:
             if analysis.is_standing:
                 posture_text = "PASSANTE"
                 posture_color = (0, 0, 255)    # Vermelho
+            elif analysis.is_lying:
+                posture_text = "DEITADO"
+                posture_color = (0, 255, 0)    # Verde
             else:
                 posture_text = "PACIENTE"
                 posture_color = (0, 255, 0)    # Verde
@@ -782,15 +785,21 @@ class DisplayManager:
                         self.FONT, self.FONT_SCALE_SMALL, posture_color, 1)
             y_sep += 15
 
-        # Postura sentada (ângulo)
-        if analysis and analysis.torso_hip_knee_angle is not None:
-            angle_val = analysis.torso_hip_knee_angle
-            if analysis.is_sitting:
-                sit_text = f"SENTADO {angle_val:.0f}deg"
-                sit_color = (0, 165, 255)   # Laranja
+        # Postura sentada (ângulo ou neck height)
+        if analysis and analysis.is_sitting:
+            if analysis.torso_hip_knee_angle is not None:
+                sit_text = f"SENTADO {analysis.torso_hip_knee_angle:.0f}deg"
+            elif analysis.neck_above_bed_ratio is not None:
+                sit_text = f"SENTADO (neck) {analysis.neck_above_bed_ratio:.0%}"
             else:
-                sit_text = f"Angulo: {angle_val:.0f}deg"
-                sit_color = (0, 255, 0)     # Verde
+                sit_text = "SENTADO"
+            sit_color = (0, 165, 255)   # Laranja
+            cv2.putText(dashboard, sit_text, (10, y_sep),
+                        self.FONT, self.FONT_SCALE_SMALL, sit_color, 1)
+            y_sep += 15
+        elif analysis and analysis.torso_hip_knee_angle is not None:
+            sit_text = f"Angulo: {analysis.torso_hip_knee_angle:.0f}deg"
+            sit_color = (0, 255, 0)     # Verde
             cv2.putText(dashboard, sit_text, (10, y_sep),
                         self.FONT, self.FONT_SCALE_SMALL, sit_color, 1)
             y_sep += 15
