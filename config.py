@@ -88,7 +88,13 @@ BED_DETECTION_DIAGNOSTIC = True
 # Thresholds para transições de estado
 THRESHOLD_REL_HEIGHT_SITTING = 0.6  # Altura relativa indicando paciente sentando
 THRESHOLD_DELTA_Y_ALERT = 5.0  # Velocidade vertical para estado de alerta
-THRESHOLD_OUTSIDE_BED_MARGIN = 0.1  # Margem para considerar paciente fora da cama
+
+# Margens assimétricas para zona da cama (percentual do bbox)
+# Compensa perspectiva da câmera overhead a ~45°
+BED_MARGIN_TOP = 0.30     # Topo: maior margem (cabeça do paciente sentado sobe acima do bbox)
+BED_MARGIN_BOTTOM = 0.05  # Base: margem mínima (pés ficam dentro do bbox)
+BED_MARGIN_LEFT = 0.10    # Lados: margem moderada
+BED_MARGIN_RIGHT = 0.10
 
 # Calibração do sistema
 CALIBRATION_FRAMES = 20              # Quadros para calibração (mais frames = mais chances)

@@ -12,6 +12,10 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from config import (
+    BED_MARGIN_BOTTOM,
+    BED_MARGIN_LEFT,
+    BED_MARGIN_RIGHT,
+    BED_MARGIN_TOP,
     EMA_ALPHA,
     EMA_THRESHOLD_ENTER_OUT,
     EMA_THRESHOLD_ENTER_RISK,
@@ -263,30 +267,29 @@ class PoseAnalyzer:
     def is_point_in_bed(
         self,
         point: Tuple[float, float],
-        margin: float = 0.1,
     ) -> bool:
         """
-        Verifica se ponto esta dentro da area da cama.
+        Verifica se ponto esta dentro da area da cama com margens assimetricas.
+
+        Usa margens diferentes por lado para compensar a perspectiva da camera
+        overhead (~45 graus). A margem do topo eh maior porque a cabeca do
+        paciente sentado se projeta acima do bbox do colchao.
 
         Args:
             point: Coordenadas (x, y) do ponto
-            margin: Margem percentual para considerar dentro da cama
 
         Returns:
-            True se ponto esta dentro da cama (com margem)
+            True se ponto esta dentro da zona expandida da cama
         """
         x1, y1, x2, y2 = self.bed_bbox
         bed_width = x2 - x1
         bed_height = y2 - y1
 
-        # Aplica margem
-        margin_x = bed_width * margin
-        margin_y = bed_height * margin
-
-        x1_expanded = x1 - margin_x
-        x2_expanded = x2 + margin_x
-        y1_expanded = y1 - margin_y
-        y2_expanded = y2 + margin_y
+        # Margens assimetricas (y1=topo da imagem, y2=base)
+        x1_expanded = x1 - bed_width * BED_MARGIN_LEFT
+        x2_expanded = x2 + bed_width * BED_MARGIN_RIGHT
+        y1_expanded = y1 - bed_height * BED_MARGIN_TOP
+        y2_expanded = y2 + bed_height * BED_MARGIN_BOTTOM
 
         px, py = point
         return x1_expanded <= px <= x2_expanded and y1_expanded <= py <= y2_expanded
@@ -797,6 +800,14 @@ class PoseStateMachineEMA:
             analysis.all_monitored_in_bed and
             not (analysis.is_sitting is True)  # Nao eh seguro se sentado
         ) else 0.0
+
+        # Pessoa em pe (passante) nao deve alimentar sinais de risco/fora
+        # Quando is_standing=True, zera todos os sinais para que scores decaiam via EMA
+        # O paciente real sera capturado na transicao deitado→sentado→em pe
+        if analysis.is_standing is True:
+            signal_out = 0.0
+            signal_risk = 0.0
+            signal_patient_in_bed = 0.0
 
         # Override de sinais em modo ocluso (pescoco+ombros visiveis, quadris nao)
         if analysis.occluded_mode and not analysis.core_points_visible:
