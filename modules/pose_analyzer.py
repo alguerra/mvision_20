@@ -838,14 +838,19 @@ class PoseStateMachineEMA:
             not (analysis.is_sitting is True)  # Nao eh seguro se sentado
         ) else 0.0
 
-        # Pessoa em pe (passante) nao deve alimentar sinais de risco/fora
-        # Quando is_standing=True, zera todos os sinais para que scores decaiam via EMA
-        # O paciente real sera capturado na transicao deitado→sentado→em pe
+        # Pessoa em pe: comportamento depende do estado
         if analysis.is_standing is True:
-            signal_out = 0.0
-            signal_risk = 0.0
+            # Em pe nunca eh "na cama" nem "seguro"
             signal_patient_in_bed = 0.0
             signal_safe = 0.0
+            if self.current_state == self.AGUARDANDO:
+                # AGUARDANDO: passante — zera tudo para proteger contra falsos positivos
+                signal_out = 0.0
+                signal_risk = 0.0
+            else:
+                # Paciente confirmado se levantou: sinaliza risco de queda
+                # Permite escalada MONITORANDO → RISCO → PACIENTE_FORA
+                signal_risk = 1.0
 
         # Override de sinais em modo ocluso (pescoco+ombros visiveis, quadris nao)
         if analysis.occluded_mode and not analysis.core_points_visible:
