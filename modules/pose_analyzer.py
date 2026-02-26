@@ -761,20 +761,23 @@ class PoseStateMachineEMA:
         Returns:
             Estado atual
         """
-        # Se mais de uma pessoa e paciente ja confirmado, transita para ACOMPANHADO
-        # Se paciente nao foi confirmado (AGUARDANDO), ignora — nao ha paciente para acompanhar
+        # Se mais de uma pessoa, nao podemos monitorar com seguranca
+        # Com paciente confirmado: transita para ACOMPANHADO
+        # Sem paciente confirmado (AGUARDANDO): decai scores para nao acumular
         if person_count > 1:
             self._frames_without_person = 0
             if self.patient_confirmed and self.current_state != self.ACOMPANHADO:
                 self.current_state = self.ACOMPANHADO
+            elif not self.patient_confirmed:
+                self._decay_all_scores()
             return self.current_state
 
         # Saindo de ACOMPANHADO quando volta a 1 pessoa (ou 0)
-        # Decai scores para evitar transicao falsa por valores congelados
-        # durante ACOMPANHADO (scores nao foram atualizados enquanto person_count > 1)
+        # Volta para AGUARDANDO: precisa re-confirmar paciente sozinho na cama
         if self.current_state == self.ACOMPANHADO:
             self._decay_all_scores()
-            self.current_state = self.MONITORANDO
+            self.current_state = self.AGUARDANDO
+            self.patient_confirmed = False
             return self.current_state
 
         # Rastreia frames sem pessoa detectada
@@ -909,6 +912,10 @@ class PoseStateMachineEMA:
             if self.score_patient_in_bed >= self.threshold_patient_detected:
                 self.current_state = self.MONITORANDO
                 self.patient_confirmed = True
+                # Reset scores de risco/fora para dar periodo de graca
+                # Evita escalada imediata se paciente sentou para deitar
+                self.score_risk = 0.0
+                self.score_out = 0.0
             return
 
         # =====================================================================
@@ -933,8 +940,8 @@ class PoseStateMachineEMA:
 
         # Estado PACIENTE_FORA
         if self.current_state == self.PACIENTE_FORA:
-            # So volta para AGUARDANDO se paciente desaparecer completamente
-            if patient_lost:
+            # Volta para AGUARDANDO se paciente desaparecer ou dados insuficientes
+            if patient_lost or insufficient_data:
                 self.current_state = self.AGUARDANDO
                 self.patient_confirmed = False
                 return
@@ -945,15 +952,12 @@ class PoseStateMachineEMA:
             # Ou se entrar em risco parcial
             elif self.score_out < self.threshold_exit_out and self.score_risk >= self.threshold_enter_risk:
                 self.current_state = self.RISCO_POTENCIAL
-            # Escape: dados insuficientes por tempo prolongado
-            elif insufficient_data:
-                self.current_state = self.MONITORANDO
             return
 
         # Estado RISCO_POTENCIAL
         if self.current_state == self.RISCO_POTENCIAL:
-            # So volta para AGUARDANDO se paciente desaparecer completamente
-            if patient_lost:
+            # Volta para AGUARDANDO se paciente desaparecer ou dados insuficientes
+            if patient_lost or insufficient_data:
                 self.current_state = self.AGUARDANDO
                 self.patient_confirmed = False
                 return
@@ -963,9 +967,6 @@ class PoseStateMachineEMA:
                 self.current_state = self.PACIENTE_FORA
             # Volta para MONITORANDO apenas se risco diminuir E seguro aumentar significativamente
             elif self.score_risk < self.threshold_exit_risk and self.score_safe > self.threshold_exit_risk:
-                self.current_state = self.MONITORANDO
-            # Escape: dados insuficientes por tempo prolongado
-            elif insufficient_data:
                 self.current_state = self.MONITORANDO
             return
 

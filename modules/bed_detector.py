@@ -24,6 +24,7 @@ from config import (
     BED_DETECTION_CONF_PRIMARY,
     BED_DETECTION_CONF_SECONDARY,
     BED_DETECTION_DIAGNOSTIC,
+    BED_MAX_AREA_RATIO,
     BED_MIN_AREA_RATIO,
     BED_RECHECK_INTERVAL_HOURS,
     BED_REFERENCE_PATH,
@@ -222,10 +223,12 @@ class BedDetector:
             confidence = float(boxes.conf[i])
             x1, y1, x2, y2 = bbox
 
-            # Filtra detecções menores que área mínima
+            # Filtra detecções por área (muito pequenas ou muito grandes)
             det_area = (x2 - x1) * (y2 - y1)
             area_ratio = det_area / frame_area
             if area_ratio < BED_MIN_AREA_RATIO:
+                continue
+            if area_ratio > BED_MAX_AREA_RATIO:
                 continue
 
             score = self._calculate_bed_score(

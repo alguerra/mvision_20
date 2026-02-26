@@ -67,10 +67,7 @@ YOLO_CLASS_PERSON = 0
 BED_CLASS_NAMES = ["bed"]
 
 # Modelo dedicado para detecção de cama (só roda na calibração, não impacta loop principal)
-# Windows: yolov8l.pt (necessário para cama frontal à câmera, ~84MB)
-# Raspberry Pi: yolov8s.pt (yolov8l é muito pesado para ARM)
-import platform as _platform
-YOLO_BED_MODEL = "yolov8l.pt" if _platform.system() == "Windows" else "yolov8s.pt"
+YOLO_BED_MODEL = "yolov8l.pt"
 
 # Estratégia 1 (primária): classes mais prováveis
 BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
@@ -78,12 +75,14 @@ BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
 BED_CLASS_NAMES_SECONDARY = ["bed", "couch", "bench"]
 
 # Confiança mínima por estratégia
+# Confiança mínima por estratégia
 BED_DETECTION_CONF_PRIMARY = 0.15
 BED_DETECTION_CONF_SECONDARY = 0.10
 BED_DETECTION_CONF_FALLBACK = 0.05   # Só para diagnóstico (não retorna detecção)
 
-# Área mínima da detecção em relação ao frame (filtra objetos pequenos)
+# Área mínima e máxima da detecção em relação ao frame
 BED_MIN_AREA_RATIO = 0.03
+BED_MAX_AREA_RATIO = 0.35  # Descarta detecções >35% (falsos positivos que cobrem o frame)
 
 # Log diagnóstico detalhado durante calibração
 BED_DETECTION_DIAGNOSTIC = True
@@ -100,10 +99,10 @@ BED_MARGIN_LEFT = 0.10    # Lados: margem moderada
 BED_MARGIN_RIGHT = 0.10
 
 # Calibração do sistema
-CALIBRATION_FRAMES = 20              # Quadros para calibração (mais frames = mais chances)
-CALIBRATION_MAX_VARIANCE = 15        # Variação máxima em pixels para considerar estável
+CALIBRATION_FRAMES = 10              # Quadros para calibração
+CALIBRATION_MAX_VARIANCE = 20        # Variação máxima em pixels para considerar estável
 CALIBRATION_SUCCESS_DISPLAY_SECONDS = 3  # Tempo para mostrar "Configuração concluída"
-CALIBRATION_MIN_DETECTION_RATE = 0.3  # Mínimo 30% de detecções (yolov8s detecta em poucos frames)
+CALIBRATION_MIN_DETECTION_RATE = 0.5  # Maioria dos frames (5/10) deve conter a cama
 
 # Controle de FPS
 FRAME_DELAY_SECONDS = 0.2            # Sleep entre frames (5 FPS)

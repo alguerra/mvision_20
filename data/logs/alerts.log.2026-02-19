@@ -1,0 +1,151 @@
+2026-02-19 09:49:35 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 09:49:46 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 09:50:44 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 09:51:44 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 10:10:53 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 10:15:12 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 10:15:34 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 10:16:15 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 10:16:29 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:16:29 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_101629_962_RISCO_POTENCIAL.jpg
+2026-02-19 10:16:36 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 10:16:36 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_101636_484_PACIENTE_FORA.jpg
+2026-02-19 10:17:01 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: PACIENTE_FORA -> RISCO_POTENCIAL
+2026-02-19 10:17:01 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_101701_365_RISCO_POTENCIAL.jpg
+2026-02-19 10:17:05 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 10:17:05 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_101705_909_PACIENTE_FORA.jpg
+2026-02-19 10:17:25 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: PACIENTE_FORA -> RISCO_POTENCIAL
+2026-02-19 10:17:25 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_101725_154_RISCO_POTENCIAL.jpg
+2026-02-19 10:17:35 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 10:17:35 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_101735_105_PACIENTE_FORA.jpg
+2026-02-19 10:18:19 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 10:25:39 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 10:25:39 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: AGUARDANDO -> ACOMPANHADO
+2026-02-19 10:25:46 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:25:49 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:25:55 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:25:55 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:25:57 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:25:58 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: MONITORANDO -> PACIENTE_FORA
+2026-02-19 10:25:58 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_102558_155_PACIENTE_FORA.jpg
+2026-02-19 10:26:06 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: PACIENTE_FORA -> ACOMPANHADO
+2026-02-19 10:26:08 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:08 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: MONITORANDO -> PACIENTE_FORA
+2026-02-19 10:26:08 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_102608_908_PACIENTE_FORA.jpg
+2026-02-19 10:26:10 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: PACIENTE_FORA -> MONITORANDO
+2026-02-19 10:26:13 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:14 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:15 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:15 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:18 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:19 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:19 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:25 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:26 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:27 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:29 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:29 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:30 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:31 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:32 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:38 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:40 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:26:41 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:26:42 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: MONITORANDO -> PACIENTE_FORA
+2026-02-19 10:26:42 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_102642_771_PACIENTE_FORA.jpg
+2026-02-19 10:26:44 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: PACIENTE_FORA -> ACOMPANHADO
+2026-02-19 10:26:45 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 10:30:08 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 10:30:37 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 10:30:48 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:30:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:30:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: MONITORANDO -> PACIENTE_FORA
+2026-02-19 10:30:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103051_660_PACIENTE_FORA.jpg
+2026-02-19 10:30:52 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: PACIENTE_FORA -> ACOMPANHADO
+2026-02-19 10:30:53 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:30:54 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:30:54 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103054_520_RISCO_POTENCIAL.jpg
+2026-02-19 10:30:57 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: RISCO_POTENCIAL -> ACOMPANHADO
+2026-02-19 10:30:58 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:30:59 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:30:59 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103059_217_RISCO_POTENCIAL.jpg
+2026-02-19 10:31:13 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: RISCO_POTENCIAL -> ACOMPANHADO
+2026-02-19 10:31:18 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:31:27 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:31:27 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103127_820_RISCO_POTENCIAL.jpg
+2026-02-19 10:31:33 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 10:31:33 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103133_721_PACIENTE_FORA.jpg
+2026-02-19 10:31:38 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: PACIENTE_FORA -> RISCO_POTENCIAL
+2026-02-19 10:31:38 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103138_286_RISCO_POTENCIAL.jpg
+2026-02-19 10:31:39 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 10:31:39 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103139_452_PACIENTE_FORA.jpg
+2026-02-19 10:31:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | AGUARDANDO | Transicao: PACIENTE_FORA -> AGUARDANDO
+2026-02-19 10:32:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 10:33:01 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:33:01 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103301_030_RISCO_POTENCIAL.jpg
+2026-02-19 10:33:10 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: RISCO_POTENCIAL -> MONITORANDO
+2026-02-19 10:33:24 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:33:29 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:33:30 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:33:30 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_103330_258_RISCO_POTENCIAL.jpg
+2026-02-19 10:33:32 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: RISCO_POTENCIAL -> ACOMPANHADO
+2026-02-19 10:33:42 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 10:45:57 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 10:46:44 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 10:46:52 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:47:12 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:47:27 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:47:27 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_104727_509_RISCO_POTENCIAL.jpg
+2026-02-19 10:47:35 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 10:47:35 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_104735_381_PACIENTE_FORA.jpg
+2026-02-19 10:47:40 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: PACIENTE_FORA -> MONITORANDO
+2026-02-19 10:47:50 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | ACOMPANHADO | Transicao: MONITORANDO -> ACOMPANHADO
+2026-02-19 10:47:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: ACOMPANHADO -> MONITORANDO
+2026-02-19 10:47:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 10:47:51 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_104751_776_RISCO_POTENCIAL.jpg
+2026-02-19 10:47:54 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 10:47:54 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_104754_321_PACIENTE_FORA.jpg
+2026-02-19 10:48:06 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | AGUARDANDO | Transicao: PACIENTE_FORA -> AGUARDANDO
+2026-02-19 10:50:24 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 10:51:07 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 10:59:20 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:00:32 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 11:12:42 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:13:14 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento encerrado
+2026-02-19 11:14:23 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:15:24 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:18:44 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:20:56 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:22:12 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:22:24 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:22:42 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 11:22:42 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_112242_218_RISCO_POTENCIAL.jpg
+2026-02-19 11:22:50 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 11:22:50 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_112250_721_PACIENTE_FORA.jpg
+2026-02-19 11:23:04 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | AGUARDANDO | Transicao: PACIENTE_FORA -> AGUARDANDO
+2026-02-19 11:24:13 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:28:37 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:31:29 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:31:58 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:32:06 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 11:32:06 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_113206_101_RISCO_POTENCIAL.jpg
+2026-02-19 11:32:11 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 11:32:11 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_113211_074_PACIENTE_FORA.jpg
+2026-02-19 11:32:23 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | AGUARDANDO | Transicao: PACIENTE_FORA -> AGUARDANDO
+2026-02-19 11:34:07 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | INFO | Sistema de monitoramento iniciado
+2026-02-19 11:34:17 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:34:21 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 11:34:21 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_113421_133_RISCO_POTENCIAL.jpg
+2026-02-19 11:34:25 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 11:34:25 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_113425_965_PACIENTE_FORA.jpg
+2026-02-19 11:34:35 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | AGUARDANDO | Transicao: PACIENTE_FORA -> AGUARDANDO
+2026-02-19 11:34:43 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:34:46 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: MONITORANDO -> PACIENTE_FORA
+2026-02-19 11:34:46 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_113446_858_PACIENTE_FORA.jpg
+2026-02-19 11:35:00 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | AGUARDANDO | Transicao: PACIENTE_FORA -> AGUARDANDO
+2026-02-19 11:35:50 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | MONITORANDO | Transicao: AGUARDANDO -> MONITORANDO
+2026-02-19 11:36:03 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | RISCO_POTENCIAL | Transicao: MONITORANDO -> RISCO_POTENCIAL
+2026-02-19 11:36:03 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_113603_491_RISCO_POTENCIAL.jpg
+2026-02-19 11:36:11 | DEV-PC-01 | Desenvolvimento | Lab | 01 | WARNING | ALERTA | PACIENTE_FORA | Transicao: RISCO_POTENCIAL -> PACIENTE_FORA
+2026-02-19 11:36:11 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | SISTEMA | IMAGEM_SALVA | data/alert_images\alert_20260219_113611_426_PACIENTE_FORA.jpg
+2026-02-19 11:36:22 | DEV-PC-01 | Desenvolvimento | Lab | 01 | INFO | TRANSICAO | AGUARDANDO | Transicao: PACIENTE_FORA -> AGUARDANDO

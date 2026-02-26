@@ -227,18 +227,39 @@ def calibrate_bed(
         print(f"    Dica: verifique os logs de diagnostico acima para ver o que o YOLO detectou")
         return None
 
-    # Calcula variância
+    # Filtra outliers via mediana + IQR antes de calcular variância
+    # Isso lida com frames onde o YOLO alterna entre detecções de tamanhos diferentes
     bboxes = np.array(detections)
-    variance = bboxes.std(axis=0).max()
+    median_bbox = np.median(bboxes, axis=0)
+    q1 = np.percentile(bboxes, 25, axis=0)
+    q3 = np.percentile(bboxes, 75, axis=0)
+    iqr = q3 - q1
+    margin = np.maximum(iqr * 1.5, 30)  # Mínimo 30px de tolerância
+    lower = median_bbox - margin
+    upper = median_bbox + margin
+    mask = np.all((bboxes >= lower) & (bboxes <= upper), axis=1)
+    filtered = bboxes[mask]
+
+    n_removed = len(bboxes) - len(filtered)
+    if n_removed > 0:
+        print(f"    Filtrados {n_removed} outliers de {len(bboxes)} deteccoes")
+
+    # Verifica se ainda tem detecções suficientes após filtro
+    if len(filtered) < min_detections:
+        print(f"    Calibracao falhou: apenas {len(filtered)}/{num_frames} deteccoes apos filtro")
+        return None
+
+    # Calcula variância sobre detecções filtradas
+    variance = filtered.std(axis=0).max()
 
     if variance > max_variance:
         print(f"    Calibracao falhou: variancia {variance:.1f} > {max_variance}")
         return None
 
-    # Retorna média
-    avg_bbox = tuple(bboxes.mean(axis=0).astype(int))
-    print(f"    Calibracao OK: variancia {variance:.1f}, bbox medio {avg_bbox}")
-    return avg_bbox
+    # Retorna mediana (mais robusta que média contra outliers residuais)
+    result_bbox = tuple(np.median(filtered, axis=0).astype(int))
+    print(f"    Calibracao OK: variancia {variance:.1f}, bbox {result_bbox} ({len(filtered)} deteccoes)")
+    return result_bbox
 
 
 def _kill_previous_camera_processes() -> None:
