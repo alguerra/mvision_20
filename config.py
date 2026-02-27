@@ -43,6 +43,7 @@ SITTING_ANGLE_THRESHOLD = 120            # Ângulo pescoço-quadril-joelho abaix
 SITTING_MIN_ASPECT_RATIO = 0.7           # Mínimo AR para avaliar postura sentada (era 1.0 hardcoded)
 NECK_ABOVE_BED_SITTING_RATIO = 0.15      # Pescoço >15% da altura da cama acima do topo = sentado
 LYING_MAX_ASPECT_RATIO = 0.8             # AR abaixo = bbox horizontalizado = deitado
+PERSON_BED_CONTAINMENT_MIN = 0.4         # Fração mínima do bbox da pessoa dentro da cama expandida
 
 # Índices dos keypoints COCO format (YOLOv8-Pose)
 KP_LEFT_SHOULDER = 5

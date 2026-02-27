@@ -781,6 +781,8 @@ class DisplayManager:
                 detail += f" AR:{analysis.person_bbox_aspect_ratio:.1f}"
             if analysis.person_bed_overlap is not None:
                 detail += f" OV:{analysis.person_bed_overlap:.0%}"
+            if analysis.person_bed_containment is not None:
+                detail += f" CT:{analysis.person_bed_containment:.0%}"
             cv2.putText(dashboard, posture_text + detail, (10, y_sep),
                         self.FONT, self.FONT_SCALE_SMALL, posture_color, 1)
             y_sep += 15

@@ -33,6 +33,7 @@ from config import (
     KP_RIGHT_SHOULDER,
     LYING_MAX_ASPECT_RATIO,
     NECK_ABOVE_BED_SITTING_RATIO,
+    PERSON_BED_CONTAINMENT_MIN,
     PERSON_BBOX_ASPECT_RATIO_UPRIGHT,
     PERSON_BED_OVERLAP_MAX_STANDING,
     POSE_CONFIDENCE_HIGH,
@@ -146,6 +147,9 @@ class PositionAnalysis:
     is_sitting: Optional[bool] = None             # True = postura sentada detectada
     torso_hip_knee_angle: Optional[float] = None  # Ângulo pescoço-quadril-joelho em graus
     neck_above_bed_ratio: Optional[float] = None  # Quanto acima do topo da cama (fallback sitting)
+
+    # Contenção pessoa/cama
+    person_bed_containment: Optional[float] = None  # Fração do bbox contida na cama expandida (0-1)
 
     # Detecção explícita de deitado
     is_lying: Optional[bool] = None               # True = postura deitada detectada
@@ -509,6 +513,22 @@ class PoseAnalyzer:
                         analysis.torso_ratio < TORSO_RATIO_MIN_FOR_LYING):
                     analysis.is_lying = True
 
+            # --- Contenção: fração do bbox da pessoa dentro da cama COM margens ---
+            if p_area > 0:
+                bed_x1, bed_y1, bed_x2, bed_y2 = self.bed_bbox
+                bed_width = bed_x2 - bed_x1
+                bed_height = bed_y2 - bed_y1
+                exp_x1 = bed_x1 - bed_width * BED_MARGIN_LEFT
+                exp_x2 = bed_x2 + bed_width * BED_MARGIN_RIGHT
+                exp_y1 = bed_y1 - bed_height * BED_MARGIN_TOP
+                exp_y2 = bed_y2 + bed_height * BED_MARGIN_BOTTOM
+                ct_x1 = max(px1, exp_x1)
+                ct_y1 = max(py1, exp_y1)
+                ct_x2 = min(px2, exp_x2)
+                ct_y2 = min(py2, exp_y2)
+                ct_area = max(0, ct_x2 - ct_x1) * max(0, ct_y2 - ct_y1)
+                analysis.person_bed_containment = ct_area / p_area
+
         # Calcula resumo
         analysis.points_inside = points_inside
         analysis.points_outside = points_outside
@@ -851,6 +871,16 @@ class PoseStateMachineEMA:
                 # Paciente confirmado se levantou: sinaliza risco de queda
                 # Permite escalada MONITORANDO → RISCO → PACIENTE_FORA
                 signal_risk = 1.0
+
+        # Pessoa com bbox muito fora da cama: comportamento similar a is_standing
+        if (not (analysis.is_standing is True) and
+                analysis.person_bed_containment is not None and
+                analysis.person_bed_containment < PERSON_BED_CONTAINMENT_MIN):
+            signal_patient_in_bed = 0.0
+            signal_safe = 0.0
+            if self.current_state == self.AGUARDANDO:
+                signal_out = 0.0
+                signal_risk = 0.0
 
         # Override de sinais em modo ocluso (pescoco+ombros visiveis, quadris nao)
         if analysis.occluded_mode and not analysis.core_points_visible:
