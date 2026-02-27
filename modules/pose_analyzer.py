@@ -21,6 +21,7 @@ from config import (
     EMA_THRESHOLD_ENTER_RISK,
     EMA_THRESHOLD_EXIT_OUT,
     EMA_THRESHOLD_EXIT_RISK,
+    EMA_THRESHOLD_EXIT_SAFE,
     EMA_THRESHOLD_PATIENT_DETECTED,
     EMA_THRESHOLD_PATIENT_LOST,
     KP_LEFT_ANKLE,
@@ -726,6 +727,7 @@ class PoseStateMachineEMA:
         threshold_exit_risk: float = EMA_THRESHOLD_EXIT_RISK,
         threshold_enter_out: float = EMA_THRESHOLD_ENTER_OUT,
         threshold_exit_out: float = EMA_THRESHOLD_EXIT_OUT,
+        threshold_exit_safe: float = EMA_THRESHOLD_EXIT_SAFE,
         threshold_patient_detected: float = EMA_THRESHOLD_PATIENT_DETECTED,
         threshold_patient_lost: float = EMA_THRESHOLD_PATIENT_LOST,
     ):
@@ -738,6 +740,7 @@ class PoseStateMachineEMA:
             threshold_exit_risk: Score para sair de RISCO_POTENCIAL
             threshold_enter_out: Score para entrar em PACIENTE_FORA
             threshold_exit_out: Score para sair de PACIENTE_FORA
+            threshold_exit_safe: Score minimo de safe para sair de RISCO/FORA
             threshold_patient_detected: Score para confirmar paciente na cama
             threshold_patient_lost: Score para considerar paciente perdido
         """
@@ -746,6 +749,7 @@ class PoseStateMachineEMA:
         self.threshold_exit_risk = threshold_exit_risk
         self.threshold_enter_out = threshold_enter_out
         self.threshold_exit_out = threshold_exit_out
+        self.threshold_exit_safe = threshold_exit_safe
         self.threshold_patient_detected = threshold_patient_detected
         self.threshold_patient_lost = threshold_patient_lost
 
@@ -763,6 +767,11 @@ class PoseStateMachineEMA:
         # Contador para rastrear frames sem deteccao de pessoa
         self._frames_without_person = 0
         self._frames_to_lose_patient = 15  # Frames sem pessoa para considerar paciente perdido
+
+        # Contadores para exigir persistencia de pose (evita artefatos de 1-2 frames)
+        self._pose_frames_required = 3  # Frames consecutivos para confirmar pose
+        self._standing_frames = 0
+        self._sitting_frames = 0
 
     def update(
         self,
@@ -836,13 +845,13 @@ class PoseStateMachineEMA:
             analysis.hip_in_bed == False
         )
 
-        # Risco = alguns pontos fora (mas nao todos) OU postura sentada
+        # Risco = alguns pontos fora (mas nao todos)
+        # Nota: sitting eh adicionado DEPOIS da confirmacao multi-frame
         signal_risk = 1.0 if (
-            (analysis.points_monitored > 0 and
-             analysis.any_outside_bed and
-             not analysis.all_outside_bed and
-             not core_points_outside)  # Se pontos essenciais fora, nao eh risco, eh FORA
-            or (analysis.is_sitting is True)  # Sentado = risco mesmo com pontos na cama
+            analysis.points_monitored > 0 and
+            analysis.any_outside_bed and
+            not analysis.all_outside_bed and
+            not core_points_outside  # Se pontos essenciais fora, nao eh risco, eh FORA
         ) else 0.0
 
         # Fora = todos os pontos monitorados fora da cama OU pontos essenciais fora
@@ -851,16 +860,28 @@ class PoseStateMachineEMA:
             core_points_outside
         ) else 0.0
 
-        # Seguro = todos os pontos dentro da cama E nao sentado
+        # Seguro = todos os pontos dentro da cama (sitting ajustado apos confirmacao)
         signal_safe = 1.0 if (
             analysis.points_monitored > 0 and
-            analysis.all_monitored_in_bed and
-            not (analysis.is_sitting is True)  # Nao eh seguro se sentado
+            analysis.all_monitored_in_bed
         ) else 0.0
 
-        # Pessoa em pe: comportamento depende do estado
+        # Contadores de persistencia de pose (evita artefatos de 1-2 frames)
         if analysis.is_standing is True:
-            # Em pe nunca eh "na cama" nem "seguro"
+            self._standing_frames += 1
+        else:
+            self._standing_frames = 0
+
+        if analysis.is_sitting is True:
+            self._sitting_frames += 1
+        else:
+            self._sitting_frames = 0
+
+        standing_confirmed = self._standing_frames >= self._pose_frames_required
+        sitting_confirmed = self._sitting_frames >= self._pose_frames_required
+
+        # Pessoa em pe confirmada: override de sinais
+        if standing_confirmed:
             signal_patient_in_bed = 0.0
             signal_safe = 0.0
             if self.current_state == self.AGUARDANDO:
@@ -872,8 +893,13 @@ class PoseStateMachineEMA:
                 # Permite escalada MONITORANDO → RISCO → PACIENTE_FORA
                 signal_risk = 1.0
 
-        # Pessoa com bbox muito fora da cama: comportamento similar a is_standing
-        if (not (analysis.is_standing is True) and
+        # Paciente sentado confirmado: risco mesmo com pontos na cama
+        if sitting_confirmed and not standing_confirmed:
+            signal_risk = 1.0
+            signal_safe = 0.0
+
+        # Pessoa com bbox muito fora da cama: comportamento similar a standing
+        if (not standing_confirmed and
                 analysis.person_bed_containment is not None and
                 analysis.person_bed_containment < PERSON_BED_CONTAINMENT_MIN):
             signal_patient_in_bed = 0.0
@@ -967,10 +993,10 @@ class PoseStateMachineEMA:
         # Sem isso, RISCO_POTENCIAL/PACIENTE_FORA ficam em deadlock porque
         # a condicao de saida exige score_safe > threshold, que nunca sobe sem sinal.
         insufficient_data = (
-            self.score_risk < 0.1 and
-            self.score_out < 0.1 and
-            self.score_safe < 0.1 and
-            self.score_patient_visible < 0.2
+            self.score_risk < 0.2 and
+            self.score_out < 0.2 and
+            self.score_safe < 0.2 and
+            self.score_patient_visible < 0.3
         )
 
         # Estado PACIENTE_FORA
@@ -982,10 +1008,14 @@ class PoseStateMachineEMA:
                 return
 
             # Sai de PACIENTE_FORA se score de "fora" cair E paciente voltar para cama
-            if self.score_out < self.threshold_exit_out and self.score_safe > self.threshold_exit_risk:
+            if self.score_out < self.threshold_exit_out and self.score_safe > self.threshold_exit_safe:
                 self.current_state = self.MONITORANDO
             # Ou se entrar em risco parcial
             elif self.score_out < self.threshold_exit_out and self.score_risk >= self.threshold_enter_risk:
+                self.current_state = self.RISCO_POTENCIAL
+            # Escape: score_out caiu mas safe/risk nao atingem thresholds (faixa morta)
+            # Transita para RISCO_POTENCIAL como estado intermediario seguro
+            elif self.score_out < self.threshold_exit_out:
                 self.current_state = self.RISCO_POTENCIAL
             return
 
@@ -1000,8 +1030,8 @@ class PoseStateMachineEMA:
             # Escala para PACIENTE_FORA se todos pontos sairem
             if self.score_out >= self.threshold_enter_out:
                 self.current_state = self.PACIENTE_FORA
-            # Volta para MONITORANDO apenas se risco diminuir E seguro aumentar significativamente
-            elif self.score_risk < self.threshold_exit_risk and self.score_safe > self.threshold_exit_risk:
+            # Volta para MONITORANDO apenas se risco diminuir E seguro subir o suficiente
+            elif self.score_risk < self.threshold_exit_risk and self.score_safe > self.threshold_exit_safe:
                 self.current_state = self.MONITORANDO
             return
 
@@ -1050,3 +1080,5 @@ class PoseStateMachineEMA:
         self.score_out = 0.0
         self.score_safe = 0.0
         self._frames_without_person = 0
+        self._standing_frames = 0
+        self._sitting_frames = 0

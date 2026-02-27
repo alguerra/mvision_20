@@ -30,8 +30,9 @@ POSE_FRAMES_PATIENT_DETECTED = 15 # Frames para confirmar paciente na cama
 EMA_ALPHA = 0.3                   # Fator de suavização (0.1=lento, 0.5=rápido)
 EMA_THRESHOLD_ENTER_RISK = 0.5    # Score para entrar em RISCO_POTENCIAL
 EMA_THRESHOLD_EXIT_RISK = 0.3     # Score para sair de RISCO_POTENCIAL
-EMA_THRESHOLD_ENTER_OUT = 0.45    # Score para entrar em PACIENTE_FORA (2 frames)
+EMA_THRESHOLD_ENTER_OUT = 0.55    # Score para entrar em PACIENTE_FORA (acima de ENTER_RISK)
 EMA_THRESHOLD_EXIT_OUT = 0.3      # Score para sair de PACIENTE_FORA
+EMA_THRESHOLD_EXIT_SAFE = 0.5    # Score minimo de safe para sair de RISCO/FORA (mais exigente que exit_risk)
 EMA_THRESHOLD_PATIENT_DETECTED = 0.8  # Score para confirmar paciente na cama
 EMA_THRESHOLD_PATIENT_LOST = 0.15     # Score para considerar paciente perdido (muito baixo)
 

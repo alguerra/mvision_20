@@ -21,7 +21,8 @@ class GPIOAlertManager:
         self.is_raspberry_pi = self._detect_raspberry_pi()
         self.gpio_available = False
         self._alert_thread: Optional[threading.Thread] = None
-        self._alert_active = False
+        self._alert_active = threading.Event()
+        self._alert_restart = threading.Event()  # Sinaliza re-trigger do timer
         self._system_ready = False
 
         if self.is_raspberry_pi:
@@ -98,17 +99,19 @@ class GPIOAlertManager:
 
     def start_risk_alert(self) -> None:
         """Inicia pisca-pisca de alerta (GPIO 16)."""
-        # Verifica se ja existe um alerta em execucao
+        # Se ja existe um alerta ativo, apenas re-trigger o timer
         if self._alert_thread is not None and self._alert_thread.is_alive():
-            return  # Ja esta piscando
+            self._alert_restart.set()  # Reseta o timer na thread existente
+            return
 
-        self._alert_active = True
+        self._alert_active.set()
+        self._alert_restart.clear()
         self._alert_thread = threading.Thread(target=self._alert_blink_loop, daemon=True)
         self._alert_thread.start()
 
     def stop_risk_alert(self) -> None:
         """Para o pisca-pisca de alerta."""
-        self._alert_active = False
+        self._alert_active.clear()
         if self._alert_thread is not None and self._alert_thread.is_alive():
             self._alert_thread.join(timeout=1.0)
         self._alert_thread = None
@@ -122,7 +125,12 @@ class GPIOAlertManager:
         blink_state = False
         start_time = time.time()
 
-        while self._alert_active:
+        while self._alert_active.is_set():
+            # Re-trigger: reseta o timer quando start_risk_alert() eh chamado novamente
+            if self._alert_restart.is_set():
+                start_time = time.time()
+                self._alert_restart.clear()
+
             # Verifica se excedeu a duracao maxima
             elapsed = time.time() - start_time
             if elapsed >= GPIO_ALERT_DURATION:
@@ -140,7 +148,7 @@ class GPIOAlertManager:
             time.sleep(GPIO_BLINK_INTERVAL)
 
         # Garante LED desligado ao finalizar
-        self._alert_active = False
+        self._alert_active.clear()
         if self.is_raspberry_pi and self.gpio_available:
             self.GPIO.output(GPIO_PIN_ALERT, self.GPIO.LOW)
 
