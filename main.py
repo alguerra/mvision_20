@@ -42,8 +42,11 @@ from ultralytics import YOLO
 
 from config import (
     BED_STANDBY_RETRY_SECONDS,
+    CALIBRATION_CONSISTENCY_MAX_DIST,
+    CALIBRATION_CONSISTENCY_VARIANCE,
     CALIBRATION_FRAMES,
     CALIBRATION_MAX_VARIANCE,
+    CALIBRATION_MIN_CONSISTENT,
     CALIBRATION_MIN_DETECTION_RATE,
     CALIBRATION_SUCCESS_DISPLAY_SECONDS,
     CAMERA_BACKEND,
@@ -165,6 +168,126 @@ def safe_cleanup(camera: Optional[CameraBase], display: Optional[DisplayManager]
 # FUNCOES PRINCIPAIS
 # =============================================================================
 
+def _find_consistent_clusters(
+    bboxes: np.ndarray,
+    max_dist: float,
+) -> list:
+    """
+    Agrupa deteccoes por proximidade espacial (complete-linkage).
+    Cada bbox so entra no cluster se proximo de TODOS os membros existentes.
+    """
+    n = len(bboxes)
+    assigned = [False] * n
+    clusters = []
+
+    for i in range(n):
+        if assigned[i]:
+            continue
+        cluster = [i]
+        assigned[i] = True
+        for j in range(i + 1, n):
+            if assigned[j]:
+                continue
+            close_to_all = True
+            for k in cluster:
+                dist = np.max(np.abs(bboxes[j] - bboxes[k]))
+                if dist > max_dist:
+                    close_to_all = False
+                    break
+            if close_to_all:
+                cluster.append(j)
+                assigned[j] = True
+        clusters.append(cluster)
+
+    return clusters
+
+
+def _calibrate_standard(
+    detections: list,
+    num_frames: int,
+    min_detections: int,
+    max_variance: float,
+) -> Optional[Tuple[int, int, int, int]]:
+    """Calibracao padrao: filtra outliers via IQR, aceita se variancia baixa."""
+    bboxes = np.array(detections)
+    median_bbox = np.median(bboxes, axis=0)
+    q1 = np.percentile(bboxes, 25, axis=0)
+    q3 = np.percentile(bboxes, 75, axis=0)
+    iqr = q3 - q1
+    margin = np.maximum(iqr * 1.5, 30)
+    lower = median_bbox - margin
+    upper = median_bbox + margin
+    mask = np.all((bboxes >= lower) & (bboxes <= upper), axis=1)
+    filtered = bboxes[mask]
+
+    n_removed = len(bboxes) - len(filtered)
+    if n_removed > 0:
+        print(f"    [padrao] Filtrados {n_removed} outliers de {len(bboxes)} deteccoes")
+
+    if len(filtered) < min_detections:
+        print(f"    [padrao] Falhou: apenas {len(filtered)}/{num_frames} deteccoes apos filtro")
+        return None
+
+    variance = filtered.std(axis=0).max()
+
+    if variance > max_variance:
+        print(f"    [padrao] Falhou: variancia {variance:.1f} > {max_variance}")
+        return None
+
+    result_bbox = tuple(np.median(filtered, axis=0).astype(int))
+    print(f"    [padrao] Calibracao OK: variancia {variance:.1f}, bbox {result_bbox} "
+          f"({len(filtered)} deteccoes)")
+    return result_bbox
+
+
+def _calibrate_consistency(
+    detections: list,
+    max_dist: float = CALIBRATION_CONSISTENCY_MAX_DIST,
+    min_consistent: int = CALIBRATION_MIN_CONSISTENT,
+    max_variance: float = CALIBRATION_CONSISTENCY_VARIANCE,
+) -> Optional[Tuple[int, int, int, int]]:
+    """Calibracao por consistencia: aceita cluster de deteccoes espacialmente proximas."""
+    bboxes = np.array(detections)
+    clusters = _find_consistent_clusters(bboxes, max_dist)
+
+    print(f"    [consistencia] {len(detections)} deteccoes -> {len(clusters)} cluster(s)")
+
+    best_cluster_bbox = None
+    best_cluster_score = (-1, 0.0)
+
+    for idx, cluster_indices in enumerate(clusters):
+        cluster_bboxes = bboxes[cluster_indices]
+        size = len(cluster_indices)
+
+        if size < min_consistent:
+            print(f"    [consistencia] Cluster {idx}: {size} deteccoes "
+                  f"(abaixo do minimo {min_consistent})")
+            continue
+
+        variance = cluster_bboxes.std(axis=0).max()
+        median_bbox = np.median(cluster_bboxes, axis=0)
+
+        print(f"    [consistencia] Cluster {idx}: {size} deteccoes, "
+              f"variancia {variance:.1f}px, mediana {tuple(median_bbox.astype(int))}")
+
+        if variance > max_variance:
+            print(f"    [consistencia] Cluster {idx}: variancia {variance:.1f} > "
+                  f"{max_variance}, rejeitado")
+            continue
+
+        score = (size, -variance)
+        if score > best_cluster_score:
+            best_cluster_score = score
+            best_cluster_bbox = tuple(median_bbox.astype(int))
+
+    if best_cluster_bbox is not None:
+        print(f"    [consistencia] Calibracao OK: bbox {best_cluster_bbox}")
+        return best_cluster_bbox
+
+    print(f"    [consistencia] Nenhum cluster consistente encontrado")
+    return None
+
+
 def calibrate_bed(
     camera: CameraBase,
     bed_detector: BedDetector,
@@ -220,46 +343,28 @@ def calibrate_bed(
             log_exception("Erro durante calibracao", e)
             continue
 
-    # Verifica se teve detecções suficientes
+    # --- Logica de aceitacao dual ---
     min_detections = int(num_frames * CALIBRATION_MIN_DETECTION_RATE)
-    if len(detections) < min_detections:
-        print(f"    Calibracao falhou: apenas {len(detections)}/{num_frames} deteccoes")
-        print(f"    Dica: verifique os logs de diagnostico acima para ver o que o YOLO detectou")
-        return None
 
-    # Filtra outliers via mediana + IQR antes de calcular variância
-    # Isso lida com frames onde o YOLO alterna entre detecções de tamanhos diferentes
-    bboxes = np.array(detections)
-    median_bbox = np.median(bboxes, axis=0)
-    q1 = np.percentile(bboxes, 25, axis=0)
-    q3 = np.percentile(bboxes, 75, axis=0)
-    iqr = q3 - q1
-    margin = np.maximum(iqr * 1.5, 30)  # Mínimo 30px de tolerância
-    lower = median_bbox - margin
-    upper = median_bbox + margin
-    mask = np.all((bboxes >= lower) & (bboxes <= upper), axis=1)
-    filtered = bboxes[mask]
+    # Caminho A: calibracao padrao (requer min_detections, filtra via IQR)
+    if len(detections) >= min_detections:
+        print(f"    {len(detections)}/{num_frames} deteccoes - tentando calibracao padrao")
+        result = _calibrate_standard(detections, num_frames, min_detections, max_variance)
+        if result is not None:
+            return result
 
-    n_removed = len(bboxes) - len(filtered)
-    if n_removed > 0:
-        print(f"    Filtrados {n_removed} outliers de {len(bboxes)} deteccoes")
+    # Caminho B: fallback por consistencia espacial
+    if len(detections) >= CALIBRATION_MIN_CONSISTENT:
+        print(f"    {len(detections)}/{num_frames} deteccoes - tentando calibracao por consistencia")
+        result = _calibrate_consistency(detections)
+        if result is not None:
+            return result
 
-    # Verifica se ainda tem detecções suficientes após filtro
-    if len(filtered) < min_detections:
-        print(f"    Calibracao falhou: apenas {len(filtered)}/{num_frames} deteccoes apos filtro")
-        return None
-
-    # Calcula variância sobre detecções filtradas
-    variance = filtered.std(axis=0).max()
-
-    if variance > max_variance:
-        print(f"    Calibracao falhou: variancia {variance:.1f} > {max_variance}")
-        return None
-
-    # Retorna mediana (mais robusta que média contra outliers residuais)
-    result_bbox = tuple(np.median(filtered, axis=0).astype(int))
-    print(f"    Calibracao OK: variancia {variance:.1f}, bbox {result_bbox} ({len(filtered)} deteccoes)")
-    return result_bbox
+    # Ambos falharam
+    print(f"    Calibracao falhou: {len(detections)}/{num_frames} deteccoes "
+          f"(minimo padrao={min_detections}, minimo consistencia={CALIBRATION_MIN_CONSISTENT})")
+    print(f"    Dica: verifique os logs de diagnostico acima para ver o que o YOLO detectou")
+    return None
 
 
 def _kill_previous_camera_processes() -> None:

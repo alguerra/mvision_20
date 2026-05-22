@@ -84,7 +84,7 @@ BED_DETECTION_CONF_FALLBACK = 0.05   # Só para diagnóstico (não retorna detec
 
 # Área mínima e máxima da detecção em relação ao frame
 BED_MIN_AREA_RATIO = 0.03
-BED_MAX_AREA_RATIO = 0.35  # Descarta detecções >35% (falsos positivos que cobrem o frame)
+BED_MAX_AREA_RATIO = 0.50  # Descarta detecções >50% (frontal: cama ocupa mais do frame)
 
 # Log diagnóstico detalhado durante calibração
 BED_DETECTION_DIAGNOSTIC = True
@@ -102,9 +102,16 @@ BED_MARGIN_RIGHT = 0.10
 
 # Calibração do sistema
 CALIBRATION_FRAMES = 10              # Quadros para calibração
-CALIBRATION_MAX_VARIANCE = 20        # Variação máxima em pixels para considerar estável
+CALIBRATION_MAX_VARIANCE = 35        # Variação máxima em pixels para considerar estável
 CALIBRATION_SUCCESS_DISPLAY_SECONDS = 3  # Tempo para mostrar "Configuração concluída"
 CALIBRATION_MIN_DETECTION_RATE = 0.5  # Maioria dos frames (5/10) deve conter a cama
+
+# Fallback por consistencia espacial
+# Quando calibracao padrao falha (poucas deteccoes), aceita cluster menor
+# de deteccoes espacialmente consistentes com variancia mais restrita
+CALIBRATION_MIN_CONSISTENT = 3           # Min deteccoes em cluster consistente
+CALIBRATION_CONSISTENCY_VARIANCE = 30    # Max variancia (px) para aceitar cluster
+CALIBRATION_CONSISTENCY_MAX_DIST = 80    # Max distancia entre bboxes no mesmo cluster (px)
 
 # Controle de FPS
 FRAME_DELAY_SECONDS = 0.2            # Sleep entre frames (5 FPS)
@@ -126,7 +133,7 @@ DEV_MODE = True  # Quando True, salva imagens de alertas para evidência
 # Modo de desenvolvimento: ignora detecção de cama
 # Quando True, usa a última referência salva em bed_reference.json
 # Útil para testes em ambientes sem cama/sofá disponível
-DEV_SKIP_BED_DETECTION = False
+DEV_SKIP_BED_DETECTION = True
 
 # Diretório para imagens de alertas (modo dev/homologação)
 ALERT_IMAGES_DIR = "data/alert_images"
