@@ -3,13 +3,27 @@ import numpy as np
 from ultralytics import YOLO
 import time
 
-cap = cv2.VideoCapture(0)
-time.sleep(1)
-ret, frame = cap.read()
-cap.release()
-if not ret:
-    print("FALHA na camera")
-    exit()
+try:
+    from picamera2 import Picamera2
+    cam = Picamera2()
+    config = cam.create_still_configuration(main={"size": (640, 480), "format": "RGB888"})
+    cam.configure(config)
+    cam.start()
+    time.sleep(2)
+    frame = cam.capture_array()
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    cam.stop()
+    cam.close()
+    print("Camera: Picamera2")
+except Exception:
+    cap = cv2.VideoCapture(0)
+    time.sleep(1)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        print("FALHA na camera")
+        exit()
+    print("Camera: OpenCV")
 
 cv2.imwrite("frame_original.jpg", frame)
 model = YOLO("yolov8l.pt")
