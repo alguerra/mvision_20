@@ -106,6 +106,13 @@ logger = logging.getLogger("HospitalMonitor")
 # FUNCOES DE RESILIENCIA
 # =============================================================================
 
+def normalize_frame_for_ir(frame: np.ndarray) -> np.ndarray:
+    """Converte frame para escala de cinza e volta para 3 canais (BGR).
+    Remove distorcao de cor de cameras IR que confunde o YOLO."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
 def _notify_systemd(message: bytes) -> None:
     """Envia notificação ao systemd via NOTIFY_SOCKET."""
     if not IS_LINUX:
@@ -339,6 +346,9 @@ def calibrate_bed(
             # Aplica flip horizontal se configurado
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
+
+            # Normaliza frame para cameras IR
+            frame = normalize_frame_for_ir(frame)
 
             bbox = bed_detector.detect_bed(frame, diagnostic=True)
 
@@ -585,6 +595,9 @@ def run_monitoring_loop(
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
 
+            # Normaliza frame para cameras IR (remove distorcao de cor)
+            frame = normalize_frame_for_ir(frame)
+
             # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION)
             if not DEV_SKIP_BED_DETECTION and bed_detector.needs_recheck():
                 result = bed_detector.detect_bed_detailed(frame)
@@ -798,6 +811,7 @@ def main():
                     if ret and frame is not None:
                         if FLIP_HORIZONTAL:
                             frame = cv2.flip(frame, 1)
+                        frame = normalize_frame_for_ir(frame)
                         frame = display.draw_system_message(
                             frame,
                             "CALIBRACAO FALHOU",
@@ -816,6 +830,7 @@ def main():
                 if ret and frame is not None:
                     if FLIP_HORIZONTAL:
                         frame = cv2.flip(frame, 1)
+                    frame = normalize_frame_for_ir(frame)
                     frame = display.draw_bed_polygon(frame, bed_bbox)
                     frame = display.draw_system_message(
                         frame,
