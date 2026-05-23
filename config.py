@@ -46,6 +46,12 @@ NECK_ABOVE_BED_SITTING_RATIO = 0.15      # Pescoço >15% da altura da cama acima
 LYING_MAX_ASPECT_RATIO = 0.8             # AR abaixo = bbox horizontalizado = deitado
 PERSON_BED_CONTAINMENT_MIN = 0.4         # Fração mínima do bbox da pessoa dentro da cama expandida
 
+# Hardening: período de graça após sair de ACOMPANHADO
+GRACE_PERIOD_AFTER_ACOMPANHADO = 10      # Frames de graça (~2 seg a 5 FPS)
+
+# Hardening: suavização de confiança de keypoints
+CONFIDENCE_EMA_ALPHA = 0.4               # Fator EMA para suavizar confianças (evita flickering em torno de 0.7)
+
 # Índices dos keypoints COCO format (YOLOv8-Pose)
 KP_LEFT_SHOULDER = 5
 KP_RIGHT_SHOULDER = 6

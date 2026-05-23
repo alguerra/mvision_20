@@ -227,27 +227,32 @@ class CameraOpenCV(CameraBase):
             print(f"[Camera] Erro ao capturar frame ({self._consecutive_errors})")
         if self._consecutive_errors >= self._max_errors_before_restart:
             print("[Camera] Muitos erros consecutivos, tentando reiniciar...")
+            self._consecutive_errors = 0
             self._restart_camera()
         return False, None
 
     def _restart_camera(self) -> None:
-        """Tenta reiniciar a camera apos erros."""
+        """Tenta reiniciar a camera com múltiplas tentativas e backoff."""
         import time
-        try:
-            if self.cap is not None:
-                self.cap.release()
-                self.cap = None
-            time.sleep(1)
-            self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
-            if self.cap.isOpened():
-                self._configure_capture()
-                self.set_resolution(self.width, self.height)
-                self._consecutive_errors = 0
-                print("[Camera] OpenCV reiniciada com sucesso")
-            else:
-                print("[Camera] Falha ao reiniciar - camera nao abriu")
-        except Exception as e:
-            print(f"[Camera] Falha ao reiniciar camera: {e}")
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            delay = attempt * 2
+            try:
+                if self.cap is not None:
+                    self.cap.release()
+                    self.cap = None
+                time.sleep(delay)
+                self.cap = self.cv2.VideoCapture(self.camera_index, self._backend)
+                if self.cap.isOpened():
+                    self._configure_capture()
+                    self.set_resolution(self.width, self.height)
+                    print(f"[Camera] OpenCV reiniciada com sucesso (tentativa {attempt})")
+                    return
+                else:
+                    print(f"[Camera] Tentativa {attempt}/{max_attempts} falhou - camera nao abriu")
+            except Exception as e:
+                print(f"[Camera] Tentativa {attempt}/{max_attempts} falhou: {e}")
+        print("[Camera] Todas as tentativas de reinicio falharam")
 
     def release(self) -> None:
         if self.cap is not None:
@@ -344,39 +349,37 @@ class CameraPicamera(CameraBase):
             # Tenta reiniciar a camera se muitos erros
             if self._consecutive_errors >= self._max_errors_before_restart:
                 print("[Camera] Muitos erros consecutivos, tentando reiniciar...")
+                self._consecutive_errors = 0
                 self._restart_camera()
 
             return False, None
 
     def _restart_camera(self) -> None:
-        """Tenta reiniciar a camera apos erros."""
-        try:
-            if self.picam2 is not None:
-                try:
-                    self.picam2.stop()
-                except Exception:
-                    pass
-                try:
-                    self.picam2.close()
-                except Exception:
-                    pass
+        """Tenta reiniciar a camera com múltiplas tentativas e backoff."""
+        import time
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            delay = attempt * 2
+            try:
+                self._cleanup_camera()
+                time.sleep(delay)
 
-            import time
-            time.sleep(1)  # Aguarda antes de reiniciar
-
-            from picamera2 import Picamera2
-            self.picam2 = Picamera2()
-            config = self.picam2.create_preview_configuration(
-                main={"size": (self.width, self.height), "format": "RGB888"}
-            )
-            self.picam2.configure(config)
-            self.picam2.start()
-            self._is_open = True
-            self._consecutive_errors = 0
-            print("[Camera] Picamera2 reiniciada com sucesso")
-        except Exception as e:
-            print(f"[Camera] Falha ao reiniciar camera: {e}")
-            self._is_open = False
+                from picamera2 import Picamera2
+                self.picam2 = Picamera2()
+                config = self.picam2.create_preview_configuration(
+                    main={"size": (self.width, self.height), "format": "RGB888"}
+                )
+                self.picam2.configure(config)
+                self.picam2.start()
+                self._is_open = True
+                self._consecutive_errors = 0
+                print(f"[Camera] Picamera2 reiniciada com sucesso (tentativa {attempt})")
+                return
+            except Exception as e:
+                print(f"[Camera] Tentativa {attempt}/{max_attempts} falhou: {e}")
+                self._cleanup_camera()
+        print("[Camera] Todas as tentativas de reinicio falharam")
+        self._is_open = False
 
     def release(self) -> None:
         print("[Camera] Liberando recursos da Picamera2...")

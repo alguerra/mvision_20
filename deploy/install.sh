@@ -58,13 +58,15 @@ Wants=graphical.target
 StartLimitIntervalSec=0
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
 WorkingDirectory=$PROJECT_DIR
 ExecStart=/usr/bin/python3 -u $PROJECT_DIR/main.py
 Restart=always
 RestartSec=10
+WatchdogSec=90
 StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1

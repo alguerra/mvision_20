@@ -53,6 +53,7 @@ class AlertLogger:
         self.images_dir = images_dir
         self.max_images = max_images
         self.dev_mode = dev_mode
+        self._retention_days = retention_days
 
         # Carrega configuracao do ambiente
         env_config = get_environment_config()
@@ -66,6 +67,9 @@ class AlertLogger:
 
         # Configura logger rotacionado por tempo
         self.logger = self._setup_logger(retention_days)
+
+        # Limpeza de backups antigos na inicializacao
+        self._cleanup_old_logs()
 
         # Contador de alertas
         self.alert_count = 0
@@ -118,6 +122,30 @@ class AlertLogger:
         logger.addHandler(handler)
 
         return logger
+
+    def _cleanup_old_logs(self) -> None:
+        """Remove log backups older than retention period on startup."""
+        import re
+        from datetime import timedelta
+
+        log_dir = Path(os.path.dirname(self.log_path)) if os.path.dirname(self.log_path) else Path(".")
+        log_basename = os.path.basename(self.log_path)
+        cutoff_date = datetime.now() - timedelta(days=self._retention_days)
+
+        try:
+            for backup_file in log_dir.glob(f"{log_basename}.*"):
+                suffix = backup_file.name.replace(f"{log_basename}.", "")
+                if not re.match(r'^\d{4}-\d{2}-\d{2}$', suffix):
+                    continue
+                try:
+                    file_date = datetime.strptime(suffix, "%Y-%m-%d")
+                    if file_date < cutoff_date:
+                        backup_file.unlink()
+                        self.logger.info(f"SISTEMA | LOG_CLEANUP | Removed old log: {backup_file.name}")
+                except ValueError:
+                    continue
+        except Exception as e:
+            self.logger.error(f"SISTEMA | LOG_CLEANUP_ERROR | {e}")
 
     def log_alert(
         self,

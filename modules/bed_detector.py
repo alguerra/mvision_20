@@ -47,6 +47,8 @@ class BedDetector:
         self.reference_path = Path(BED_REFERENCE_PATH)
         self.detected_class_name: Optional[str] = None
         self.detected_strategy: Optional[str] = None
+        self.detected_confidence: float = 0.0
+        self.detected_score: float = 0.0
 
         # Resolve nomes de classes para índices (legado, para recheck)
         self.bed_class_indices = self._resolve_class_names(BED_CLASS_NAMES)
@@ -307,6 +309,24 @@ class BedDetector:
         Returns:
             Tuple (x1, y1, x2, y2) com coordenadas da cama ou None se não detectada.
         """
+        result = self.detect_bed_detailed(frame, diagnostic)
+        if result is None:
+            return None
+        bbox, class_name, confidence, score = result
+        self._accept_detection(bbox, class_name, confidence, score)
+        return bbox
+
+    def detect_bed_detailed(
+        self,
+        frame: np.ndarray,
+        diagnostic: bool = False,
+    ) -> Optional[Tuple[Tuple[int, int, int, int], str, float, float]]:
+        """
+        Detecta cama sem sobrescrever a referência interna.
+
+        Returns:
+            Tuple (bbox, class_name, confidence, score) ou None.
+        """
         if not self.strategies:
             return None
 
@@ -341,18 +361,29 @@ class BedDetector:
                 )
                 if best is not None:
                     bbox, class_name, confidence, score = best
-                    self.detected_class_name = class_name
-                    self.detected_strategy = strategy["name"]
-                    self.bed_bbox = bbox
-                    self.last_detection_time = time.time()
 
                     if do_log:
                         print(f"    >>> Selecionada: {class_name} via estrategia "
                               f"'{strategy['name']}' (conf={confidence:.3f}, score={score:.3f})")
 
-                    return self.bed_bbox
+                    return bbox, class_name, confidence, score
 
         return None
+
+    def _accept_detection(
+        self,
+        bbox: Tuple[int, int, int, int],
+        class_name: str,
+        confidence: float,
+        score: float,
+    ) -> None:
+        """Aceita uma detecção como referência atual."""
+        self.bed_bbox = bbox
+        self.detected_class_name = class_name
+        self.detected_strategy = None
+        self.detected_confidence = confidence
+        self.detected_score = score
+        self.last_detection_time = time.time()
 
     def save_reference(self, bbox: Tuple[int, int, int, int]) -> None:
         """
@@ -369,6 +400,8 @@ class BedDetector:
             "timestamp": time.time(),
             "detected_class": self.detected_class_name,
             "detected_strategy": self.detected_strategy,
+            "confidence": self.detected_confidence,
+            "score": self.detected_score,
         }
 
         with open(self.reference_path, "w") as f:
@@ -393,9 +426,10 @@ class BedDetector:
 
             self.bed_bbox = tuple(data["bbox"])
             self.last_detection_time = data.get("timestamp", time.time())
-            # Carrega metadados se disponíveis (backward-compatible)
             self.detected_class_name = data.get("detected_class")
             self.detected_strategy = data.get("detected_strategy")
+            self.detected_confidence = data.get("confidence", 0.0)
+            self.detected_score = data.get("score", 0.0)
             return self.bed_bbox
 
         except (json.JSONDecodeError, KeyError):

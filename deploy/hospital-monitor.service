@@ -7,7 +7,8 @@ Wants=graphical.target
 StartLimitIntervalSec=0
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=tmed
 Group=tmed
 
@@ -18,6 +19,10 @@ ExecStart=/usr/bin/python3 -u /mvision/main.py
 # SEMPRE reinicia, não importa o motivo da falha
 Restart=always
 RestartSec=10
+
+# Watchdog: se o processo não notificar em 90s, systemd o reinicia
+# O main.py envia heartbeat a cada 30s, então 90s dá margem para 2 falhas
+WatchdogSec=90
 
 # Logs
 StandardOutput=journal

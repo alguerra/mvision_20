@@ -9,8 +9,6 @@ dist/
 build/
 
 
-
-
 # Ambiente virtual
 venv/
 env/
@@ -30,3 +28,7 @@ desktop.ini
 
 # Config local (manter template)
 config/environment.json
+
+# Registro de atividades
+/data/alert_images/
+/data/logs/

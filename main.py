@@ -106,18 +106,38 @@ logger = logging.getLogger("HospitalMonitor")
 # FUNCOES DE RESILIENCIA
 # =============================================================================
 
+def _notify_systemd(message: bytes) -> None:
+    """Envia notificação ao systemd via NOTIFY_SOCKET."""
+    if not IS_LINUX:
+        return
+    try:
+        import socket
+        addr = os.environ.get("NOTIFY_SOCKET")
+        if addr:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            try:
+                sock.connect(addr)
+                sock.sendall(message)
+            finally:
+                sock.close()
+    except Exception:
+        pass
+
+
 def send_heartbeat() -> None:
     """
     Envia heartbeat para o watchdog do sistema.
-    Atualiza o timestamp do arquivo de heartbeat.
+    Notifica o systemd watchdog e atualiza arquivo de heartbeat.
     """
     if not IS_LINUX:
-        return  # Watchdog apenas no Linux/Raspberry Pi
+        return
+
+    _notify_systemd(b"WATCHDOG=1")
 
     try:
         Path(HEARTBEAT_FILE).touch()
     except Exception:
-        pass  # Ignora erros de heartbeat
+        pass
 
 
 def log_exception(context: str, exc: Exception) -> None:
@@ -567,18 +587,26 @@ def run_monitoring_loop(
 
             # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION)
             if not DEV_SKIP_BED_DETECTION and bed_detector.needs_recheck():
-                new_bbox = bed_detector.detect_bed(frame)
-                if new_bbox and bed_detector.is_bbox_consistent(new_bbox):
-                    bed_bbox = new_bbox
-                    bed_detector.save_reference(bed_bbox)
-                    pose_analyzer.update_bed_bbox(bed_bbox)
-                    monitor.update_bed_bbox(bed_bbox)
-                    logger.info(f"Cama re-detectada: {bed_bbox}")
+                result = bed_detector.detect_bed_detailed(frame)
+                if result is not None:
+                    new_bbox, class_name, confidence, score = result
+                    current_score = bed_detector.detected_score
+                    if (bed_detector.is_bbox_consistent(new_bbox) and
+                            score >= current_score):
+                        bed_detector._accept_detection(new_bbox, class_name, confidence, score)
+                        bed_bbox = new_bbox
+                        bed_detector.save_reference(bed_bbox)
+                        pose_analyzer.update_bed_bbox(bed_bbox)
+                        monitor.update_bed_bbox(bed_bbox)
+                        logger.info(f"Cama re-detectada: {bed_bbox} (score={score:.3f})")
+                    else:
+                        bed_detector.postpone_recheck()
+                        if not bed_detector.is_bbox_consistent(new_bbox):
+                            logger.info(f"Recheck ignorado: bbox inconsistente (IoU baixo)")
+                        else:
+                            logger.info(f"Recheck ignorado: score inferior ({score:.3f} < {current_score:.3f})")
                 else:
-                    # Falhou ou inconsistente: adia recheck para proximo intervalo
                     bed_detector.postpone_recheck()
-                    if new_bbox:
-                        logger.info(f"Recheck ignorado: bbox inconsistente (IoU baixo)")
 
             # Detecta pose com YOLOv8-Pose
             results = yolo_pose.predict(frame, conf=YOLO_POSE_CONFIDENCE, verbose=False)
@@ -602,6 +630,8 @@ def run_monitoring_loop(
                             confidences = keypoints_data.conf[0].cpu().numpy()
                         else:
                             confidences = np.ones(len(keypoints))
+
+                        confidences = pose_analyzer.smooth_confidences(confidences)
 
                         # Extrai bbox da pessoa do resultado YOLO-Pose
                         if results[0].boxes is not None and len(results[0].boxes) > 0:
@@ -655,14 +685,14 @@ def run_monitoring_loop(
                 elif pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
                     print(f"[ALERTA] {pose_state}")
 
-                # Controle de alerta GPIO
-                if pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
-                    gpio_manager.start_risk_alert()
-                else:
-                    # Para o alerta em qualquer outro estado (MONITORANDO, ACOMPANHADO, AGUARDANDO)
-                    gpio_manager.stop_risk_alert()
-
                 previous_pose_state = pose_state
+
+            # Controle de alerta GPIO (fora do bloco de mudança de estado)
+            # Chamado a cada frame para manter o re-trigger ativo enquanto o alerta persistir
+            if pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
+                gpio_manager.start_risk_alert()
+            else:
+                gpio_manager.stop_risk_alert()
 
             # Feedback visual de alerta salvo
             if time.time() < alert_feedback_until and last_alert_image:
@@ -681,6 +711,7 @@ def run_monitoring_loop(
 
             if key == ord("r") or key == ord("R"):
                 pose_fsm.reset()
+                pose_analyzer.reset_confidence_ema()
                 logger.info("Maquina de estados resetada")
 
             # Frame processado com sucesso — reset contador de erros de processamento
@@ -744,14 +775,25 @@ def main():
                     print("    [DEV] Iniciando calibracao automatica...")
                     # Continua para calibracao normal em vez de sair
 
+            calibration_attempts = 0
+            max_calibration_attempts = 3
             while bed_bbox is None:
-                print("    Iniciando calibracao automatica...")
+                calibration_attempts += 1
+                print(f"    Calibracao automatica (tentativa {calibration_attempts})...")
                 bed_bbox = calibrate_bed(camera, bed_detector, display)
 
                 if bed_bbox:
                     bed_detector.save_reference(bed_bbox)
+                elif calibration_attempts >= max_calibration_attempts:
+                    saved_bbox = bed_detector.load_reference()
+                    if saved_bbox:
+                        bed_bbox = saved_bbox
+                        logger.warning(f"Calibracao falhou {max_calibration_attempts}x - usando referencia salva: {bed_bbox}")
+                        print(f"    Usando referencia salva apos {max_calibration_attempts} falhas: {bed_bbox}")
+                    else:
+                        logger.warning("Calibracao falhou e nao ha referencia salva - continuando tentativas...")
+                        calibration_attempts = 0
                 else:
-                    # Mostra mensagem de falha
                     ret, frame = camera.read()
                     if ret and frame is not None:
                         if FLIP_HORIZONTAL:
@@ -759,7 +801,7 @@ def main():
                         frame = display.draw_system_message(
                             frame,
                             "CALIBRACAO FALHOU",
-                            "Tentando novamente em 2 segundos...",
+                            f"Tentativa {calibration_attempts}/{max_calibration_attempts}...",
                             color=(0, 0, 255),
                         )
                         display.render(frame)
@@ -792,6 +834,7 @@ def main():
 
             # Ativa indicador de sistema pronto
             gpio_manager.set_system_ready(True)
+            _notify_systemd(b"READY=1")
 
             # Loop de monitoramento
             user_requested_exit = run_monitoring_loop(

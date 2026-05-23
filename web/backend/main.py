@@ -421,7 +421,7 @@ async def get_logs(
                 })
 
         total_lines = len(entries)
-        # Apply pagination
+        entries.reverse()
         entries = entries[offset:offset + limit]
 
     except Exception as e:
@@ -463,10 +463,34 @@ if FRONTEND_DIR.exists():
 
 # ============== Startup ==============
 
+
+def cleanup_old_log_files():
+    """Remove log backup files beyond retention period."""
+    from datetime import timedelta
+
+    if not LOGS_PATH.exists():
+        return
+
+    cutoff_date = datetime.now() - timedelta(days=ALERT_LOG_RETENTION_DAYS)
+
+    for backup_file in LOGS_PATH.glob("alerts.log.*"):
+        suffix = backup_file.name.replace("alerts.log.", "")
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', suffix):
+            continue
+        try:
+            file_date = datetime.strptime(suffix, "%Y-%m-%d")
+            if file_date < cutoff_date:
+                backup_file.unlink()
+                print(f"Log cleanup: removed old log {backup_file.name}")
+        except (ValueError, OSError):
+            continue
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize on startup."""
     init_auth()
+    cleanup_old_log_files()
     print("MVision Web Interface started")
     print(f"Frontend directory: {FRONTEND_DIR}")
     print(f"Frontend exists: {FRONTEND_DIR.exists()}")

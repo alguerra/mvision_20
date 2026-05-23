@@ -16,6 +16,7 @@ from config import (
     BED_MARGIN_LEFT,
     BED_MARGIN_RIGHT,
     BED_MARGIN_TOP,
+    CONFIDENCE_EMA_ALPHA,
     EMA_ALPHA,
     EMA_THRESHOLD_ENTER_OUT,
     EMA_THRESHOLD_ENTER_RISK,
@@ -24,6 +25,7 @@ from config import (
     EMA_THRESHOLD_EXIT_SAFE,
     EMA_THRESHOLD_PATIENT_DETECTED,
     EMA_THRESHOLD_PATIENT_LOST,
+    GRACE_PERIOD_AFTER_ACOMPANHADO,
     KP_LEFT_ANKLE,
     KP_LEFT_HIP,
     KP_LEFT_KNEE,
@@ -191,6 +193,24 @@ class PoseAnalyzer:
         # Buffers para persistencia de estados
         self.state_buffer: deque = deque(maxlen=frames_to_confirm)
         self.detection_buffer: deque = deque(maxlen=frames_patient_detected)
+
+        # EMA para suavização de confiança de keypoints
+        self._confidence_ema: Dict[int, float] = {}
+        self._confidence_alpha = CONFIDENCE_EMA_ALPHA
+
+    def smooth_confidences(self, confidences: np.ndarray) -> np.ndarray:
+        """Aplica EMA às confianças de keypoints para evitar flickering."""
+        smoothed = confidences.copy()
+        for i in range(len(confidences)):
+            if i in self._confidence_ema:
+                smoothed[i] = (self._confidence_alpha * confidences[i] +
+                               (1 - self._confidence_alpha) * self._confidence_ema[i])
+            self._confidence_ema[i] = float(smoothed[i])
+        return smoothed
+
+    def reset_confidence_ema(self) -> None:
+        """Reseta estado da suavização de confiança."""
+        self._confidence_ema.clear()
 
     def update_bed_bbox(self, bed_bbox: Tuple[int, int, int, int]) -> None:
         """Atualiza bbox da cama."""
@@ -731,19 +751,6 @@ class PoseStateMachineEMA:
         threshold_patient_detected: float = EMA_THRESHOLD_PATIENT_DETECTED,
         threshold_patient_lost: float = EMA_THRESHOLD_PATIENT_LOST,
     ):
-        """
-        Inicializa a maquina de estados EMA.
-
-        Args:
-            alpha: Fator de suavizacao EMA (0-1). Maior = mais rapido.
-            threshold_enter_risk: Score para entrar em RISCO_POTENCIAL
-            threshold_exit_risk: Score para sair de RISCO_POTENCIAL
-            threshold_enter_out: Score para entrar em PACIENTE_FORA
-            threshold_exit_out: Score para sair de PACIENTE_FORA
-            threshold_exit_safe: Score minimo de safe para sair de RISCO/FORA
-            threshold_patient_detected: Score para confirmar paciente na cama
-            threshold_patient_lost: Score para considerar paciente perdido
-        """
         self.alpha = alpha
         self.threshold_enter_risk = threshold_enter_risk
         self.threshold_exit_risk = threshold_exit_risk
@@ -772,6 +779,12 @@ class PoseStateMachineEMA:
         self._pose_frames_required = 3  # Frames consecutivos para confirmar pose
         self._standing_frames = 0
         self._sitting_frames = 0
+
+        # Período de graça após sair de ACOMPANHADO
+        self._grace_period_frames = GRACE_PERIOD_AFTER_ACOMPANHADO
+        self._grace_counter = 0
+        self._in_grace_period = False
+
 
     def update(
         self,
@@ -802,11 +815,13 @@ class PoseStateMachineEMA:
             return self.current_state
 
         # Saindo de ACOMPANHADO quando volta a 1 pessoa (ou 0)
-        # Volta para AGUARDANDO: precisa re-confirmar paciente sozinho na cama
+        # Inicia período de graça para estabilização da cena
         if self.current_state == self.ACOMPANHADO:
             self._decay_all_scores()
             self.current_state = self.AGUARDANDO
             self.patient_confirmed = False
+            self._in_grace_period = True
+            self._grace_counter = self._grace_period_frames
             return self.current_state
 
         # Rastreia frames sem pessoa detectada
@@ -820,6 +835,12 @@ class PoseStateMachineEMA:
             # Pessoa detectada mas sem pontos visiveis = possivel falso positivo
             # Decrementa gradualmente em vez de resetar
             self._frames_without_person = max(0, self._frames_without_person - 1)
+
+        # Período de graça: suprime risco enquanto cena estabiliza após ACOMPANHADO
+        if self._in_grace_period:
+            self._grace_counter -= 1
+            if self._grace_counter <= 0:
+                self._in_grace_period = False
 
         # Se nao ha analise ou nenhuma pessoa, decai todos os scores
         if analysis is None or body_points is None or person_count == 0:
@@ -973,8 +994,7 @@ class PoseStateMachineEMA:
             if self.score_patient_in_bed >= self.threshold_patient_detected:
                 self.current_state = self.MONITORANDO
                 self.patient_confirmed = True
-                # Reset scores de risco/fora para dar periodo de graca
-                # Evita escalada imediata se paciente sentou para deitar
+                self._in_grace_period = False
                 self.score_risk = 0.0
                 self.score_out = 0.0
             return
@@ -1043,6 +1063,10 @@ class PoseStateMachineEMA:
                 self.patient_confirmed = False
                 return
 
+            # Suprime transições de risco durante período de graça
+            if self._in_grace_period:
+                return
+
             # Entra em RISCO_POTENCIAL (alguns pontos fora ou sentado)
             if self.score_risk >= self.threshold_enter_risk:
                 self.current_state = self.RISCO_POTENCIAL
@@ -1082,3 +1106,5 @@ class PoseStateMachineEMA:
         self._frames_without_person = 0
         self._standing_frames = 0
         self._sitting_frames = 0
+        self._grace_counter = 0
+        self._in_grace_period = False
