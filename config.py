@@ -86,7 +86,7 @@ BED_CLASS_NAMES_SECONDARY = ["bed", "couch", "bench"]
 # Confiança mínima por estratégia
 BED_DETECTION_CONF_PRIMARY = 0.15
 BED_DETECTION_CONF_SECONDARY = 0.10
-BED_DETECTION_CONF_FALLBACK = 0.05   # Só para diagnóstico (não retorna detecção)
+BED_DETECTION_CONF_FALLBACK = 0.05   # Confiança minima para cameras IR/baixa luz
 
 # Área mínima e máxima da detecção em relação ao frame
 BED_MIN_AREA_RATIO = 0.03

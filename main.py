@@ -107,9 +107,9 @@ logger = logging.getLogger("HospitalMonitor")
 # =============================================================================
 
 def normalize_frame_for_ir(frame: np.ndarray) -> np.ndarray:
-    """Corrige balanco de branco para cameras IR com tonalidade roxa.
-    Equaliza os canais BGR para que cada um tenha a mesma media,
-    preservando textura e contraste que o YOLO precisa."""
+    """Corrige balanco de branco e contraste para cameras IR.
+    1) Equaliza medias dos canais BGR (remove tonalidade roxa)
+    2) Aplica CLAHE no canal L (melhora contraste local)"""
     result = frame.copy()
     avg_per_channel = result.mean(axis=(0, 1))
     global_avg = avg_per_channel.mean()
@@ -118,7 +118,10 @@ def normalize_frame_for_ir(frame: np.ndarray) -> np.ndarray:
             result[:, :, i] = np.clip(
                 result[:, :, i] * (global_avg / avg_per_channel[i]), 0, 255
             ).astype(np.uint8)
-    return result
+    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
 def _notify_systemd(message: bytes) -> None:

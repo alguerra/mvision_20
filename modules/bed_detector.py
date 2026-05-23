@@ -113,7 +113,7 @@ class BedDetector:
                 "returns_detection": True,
             })
 
-        # Estratégia 3: Exploratory (apenas diagnóstico)
+        # Estratégia 3: Exploratory (conf baixa para cameras IR/baixa luz)
         exploratory_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
         if exploratory_indices:
             strategies.append({
@@ -121,7 +121,7 @@ class BedDetector:
                 "class_names": BED_CLASS_NAMES_SECONDARY,
                 "class_indices": exploratory_indices,
                 "conf": BED_DETECTION_CONF_FALLBACK,
-                "returns_detection": False,
+                "returns_detection": True,
             })
 
         # Log das estratégias configuradas
