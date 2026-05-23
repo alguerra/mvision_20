@@ -107,10 +107,18 @@ logger = logging.getLogger("HospitalMonitor")
 # =============================================================================
 
 def normalize_frame_for_ir(frame: np.ndarray) -> np.ndarray:
-    """Converte frame para escala de cinza e volta para 3 canais (BGR).
-    Remove distorcao de cor de cameras IR que confunde o YOLO."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    """Corrige balanco de branco para cameras IR com tonalidade roxa.
+    Equaliza os canais BGR para que cada um tenha a mesma media,
+    preservando textura e contraste que o YOLO precisa."""
+    result = frame.copy()
+    avg_per_channel = result.mean(axis=(0, 1))
+    global_avg = avg_per_channel.mean()
+    for i in range(3):
+        if avg_per_channel[i] > 0:
+            result[:, :, i] = np.clip(
+                result[:, :, i] * (global_avg / avg_per_channel[i]), 0, 255
+            ).astype(np.uint8)
+    return result
 
 
 def _notify_systemd(message: bytes) -> None:
