@@ -459,10 +459,12 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
         Exception: Se falhar ao inicializar algum componente
     """
     # No Linux, aguarda X11 estar pronto (serviço pode iniciar antes do desktop)
-    # Não falha se não houver monitor - apenas aguarda o X11 inicializar
     if IS_LINUX:
-        wait_for_display(timeout_seconds=DISPLAY_WAIT_TIMEOUT, check_interval=5)
-        # Continua mesmo se não encontrar display - o X11 virtual pode estar ativo
+        display_available = wait_for_display(timeout_seconds=DISPLAY_WAIT_TIMEOUT, check_interval=5)
+        if display_available:
+            logger.info("Display X11 disponível - modo GUI ativo")
+        else:
+            logger.warning("Display X11 não disponível - sistema rodará em modo headless")
 
     # Carrega identificacao do ambiente
     environment_id = get_environment_id()
@@ -780,6 +782,9 @@ def main():
 
             camera, yolo, yolo_pose, bed_detector, display, alert_logger, gpio_manager = initialize_system()
 
+            # Notifica systemd que o processo está vivo (calibração é fase operacional)
+            _notify_systemd(b"READY=1")
+
             # Reset contador apos sucesso
             init_attempts = 0
 
@@ -801,9 +806,14 @@ def main():
 
             calibration_attempts = 0
             max_calibration_attempts = 3
+            calibration_start_time = time.time()
+            calibration_timeout = 300  # 5 minutos maximo para calibracao
             while bed_bbox is None:
+                send_heartbeat()
+
                 calibration_attempts += 1
-                print(f"    Calibracao automatica (tentativa {calibration_attempts})...")
+                elapsed = time.time() - calibration_start_time
+                print(f"    Calibracao automatica (tentativa {calibration_attempts}, {elapsed:.0f}s)...")
                 bed_bbox = calibrate_bed(camera, bed_detector, display)
 
                 if bed_bbox:
@@ -814,6 +824,9 @@ def main():
                         bed_bbox = saved_bbox
                         logger.warning(f"Calibracao falhou {max_calibration_attempts}x - usando referencia salva: {bed_bbox}")
                         print(f"    Usando referencia salva apos {max_calibration_attempts} falhas: {bed_bbox}")
+                    elif elapsed >= calibration_timeout:
+                        logger.error(f"Calibracao timeout ({calibration_timeout}s) sem referencia salva - reiniciando sistema")
+                        raise RuntimeError("Calibracao timeout sem referencia de cama")
                     else:
                         logger.warning("Calibracao falhou e nao ha referencia salva - continuando tentativas...")
                         calibration_attempts = 0
@@ -831,7 +844,6 @@ def main():
                         )
                         display.render(frame)
 
-                    send_heartbeat()
                     time.sleep(BED_STANDBY_RETRY_SECONDS)
 
             # Exibe mensagem de sucesso
@@ -858,9 +870,8 @@ def main():
 
                 time.sleep(FRAME_DELAY_SECONDS)
 
-            # Ativa indicador de sistema pronto
+            # Ativa indicador de sistema pronto (GPIO)
             gpio_manager.set_system_ready(True)
-            _notify_systemd(b"READY=1")
 
             # Loop de monitoramento
             user_requested_exit = run_monitoring_loop(

@@ -500,11 +500,11 @@ def create_display(headless: bool = False) -> DisplayBase:
     """
     Cria instancia de display para exibição com OpenCV.
 
-    O sistema aguarda a GUI estar disponível (via wait_for_display)
-    antes de chamar esta função, então sempre usa modo GUI.
+    Tenta criar display GUI. Se X11 não estiver funcional,
+    faz fallback automático para headless.
 
     Args:
-        headless: Se True, força display headless (não recomendado)
+        headless: Se True, força display headless
 
     Returns:
         Instancia de DisplayBase
@@ -512,6 +512,32 @@ def create_display(headless: bool = False) -> DisplayBase:
     if headless:
         print("[Display] Modo headless (sem GUI)")
         return DisplayHeadless()
+
+    if IS_LINUX:
+        display_env = os.environ.get("DISPLAY")
+        if not display_env:
+            print("[Display] DISPLAY não definido - modo headless")
+            return DisplayHeadless()
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["xdpyinfo"],
+                capture_output=True, timeout=5,
+                env=os.environ,
+            )
+            if result.returncode != 0:
+                print(f"[Display] X11 em {display_env} não acessível - modo headless")
+                return DisplayHeadless()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            try:
+                subprocess.run(
+                    ["xset", "q"],
+                    capture_output=True, timeout=5,
+                    env=os.environ,
+                )
+            except Exception:
+                print(f"[Display] Não foi possível verificar X11 - modo headless")
+                return DisplayHeadless()
 
     print("[Display] Modo GUI com OpenCV")
     return DisplayOpenCV()

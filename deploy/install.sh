@@ -53,7 +53,7 @@ echo "[1/4] Configurando serviço systemd..."
 cat > /etc/systemd/system/hospital-monitor.service << EOF
 [Unit]
 Description=Sistema de Monitoramento de Quedas Hospitalares
-After=graphical.target network.target
+After=multi-user.target
 Wants=graphical.target
 StartLimitIntervalSec=0
 
@@ -79,7 +79,7 @@ CPUQuota=90%
 SupplementaryGroups=gpio video
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
 EOF
 
 echo "  Serviço configurado para: $PROJECT_DIR"

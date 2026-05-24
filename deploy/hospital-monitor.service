@@ -1,6 +1,6 @@
 [Unit]
 Description=Sistema de Monitoramento de Quedas Hospitalares MVision
-After=graphical.target network.target
+After=multi-user.target
 Wants=graphical.target
 
 # Remove limite de reinicializações - SEMPRE reinicia
@@ -45,4 +45,4 @@ CPUQuota=90%
 SupplementaryGroups=gpio video
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
