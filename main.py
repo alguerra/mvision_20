@@ -61,6 +61,7 @@ from config import (
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
     WINDOW_NAME,
+    YOLO_ASETO_MODEL,
     YOLO_BED_MODEL,
     YOLO_MODEL,
     YOLO_POSE_CONFIDENCE,
@@ -358,10 +359,13 @@ def calibrate_bed(
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
 
-            # Normaliza frame para cameras IR
+            # Frame cru para ASETO (antes da normalização IR)
+            raw_frame = frame.copy()
+
+            # Normaliza frame para cameras IR (usado pelo COCO)
             frame = normalize_frame_for_ir(frame)
 
-            bbox = bed_detector.detect_bed(frame, diagnostic=True)
+            bbox = bed_detector.detect_bed(frame, raw_frame=raw_frame, diagnostic=True)
 
             if bbox:
                 detections.append(bbox)
@@ -496,14 +500,21 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
     # 2. Carrega modelos YOLO
     print("\n[2/4] Carregando modelos YOLO...")
     yolo = YOLO(YOLO_BED_MODEL)
-    print(f"    Modelo {YOLO_BED_MODEL} carregado (deteccao de cama)")
+    print(f"    Modelo {YOLO_BED_MODEL} carregado (deteccao de cama - COCO)")
+
+    yolo_aseto = None
+    if Path(YOLO_ASETO_MODEL).exists():
+        yolo_aseto = YOLO(YOLO_ASETO_MODEL)
+        print(f"    Modelo {YOLO_ASETO_MODEL} carregado (deteccao de cama - ASETO)")
+    else:
+        logger.warning(f"Modelo ASETO nao encontrado em {YOLO_ASETO_MODEL} - usando apenas COCO")
 
     yolo_pose = YOLO(YOLO_POSE_MODEL)
     print(f"    Modelo {YOLO_POSE_MODEL} carregado (pose)")
 
     # 3. Inicializa modulos
     print("\n[3/4] Inicializando modulos...")
-    bed_detector = BedDetector(yolo)
+    bed_detector = BedDetector(yolo, aseto_model=yolo_aseto)
     display = DisplayManager(WINDOW_NAME)
     alert_logger = AlertLogger()
 
@@ -608,12 +619,15 @@ def run_monitoring_loop(
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
 
+            # Frame cru para ASETO (antes da normalização IR)
+            raw_frame = frame.copy()
+
             # Normaliza frame para cameras IR (remove distorcao de cor)
             frame = normalize_frame_for_ir(frame)
 
             # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION)
             if not DEV_SKIP_BED_DETECTION and bed_detector.needs_recheck():
-                result = bed_detector.detect_bed_detailed(frame)
+                result = bed_detector.detect_bed_detailed(frame, raw_frame=raw_frame)
                 if result is not None:
                     new_bbox, class_name, confidence, score = result
                     current_score = bed_detector.detected_score
