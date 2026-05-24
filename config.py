@@ -97,7 +97,7 @@ BED_DETECTION_CONF_FALLBACK = 0.05   # Confiança minima para cameras IR/baixa l
 # Área mínima e máxima da detecção em relação ao frame
 BED_MIN_AREA_RATIO = 0.03
 BED_MAX_AREA_RATIO = 0.50  # Descarta detecções >50% (frontal: cama ocupa mais do frame)
-ASETO_MAX_AREA_RATIO = 0.98  # ASETO/IR overhead: cama pode ocupar quase todo o frame
+ASETO_MAX_AREA_RATIO = 0.75  # Cama real < 60% do frame; margem para cenario de teste
 
 # Log diagnóstico detalhado durante calibração
 BED_DETECTION_DIAGNOSTIC = True

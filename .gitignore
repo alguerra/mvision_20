@@ -32,3 +32,5 @@ config/environment.json
 # Registro de atividades
 /data/alert_images/
 /data/logs/
+/lab/
+/frame*

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from config import (
@@ -32,6 +33,20 @@ from config import (
     BED_RECHECK_INTERVAL_HOURS,
     BED_REFERENCE_PATH,
 )
+
+
+def preprocess_ir_for_aseto(frame: np.ndarray) -> np.ndarray:
+    """Converte frame IR para grayscale com CLAHE agressivo, retornando BGR."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(4, 4))
+    enhanced = clahe.apply(gray)
+    return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+
+
+def preprocess_ir_histeq(frame: np.ndarray) -> np.ndarray:
+    """Aplica histogram equalization no frame IR, retornando BGR."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return cv2.cvtColor(cv2.equalizeHist(gray), cv2.COLOR_GRAY2BGR)
 
 
 class BedDetector:
@@ -101,24 +116,34 @@ class BedDetector:
         """
         strategies = []
 
-        # Estratégia 0: ASETO fine-tuned (prioridade máxima, usa frame cru)
-        if self.aseto_model is not None:
-            aseto_indices = self._resolve_class_names_for_model(
-                self.aseto_model, ASETO_BED_CLASS_NAMES
-            )
-            if aseto_indices:
-                strategies.append({
-                    "name": "aseto",
-                    "class_names": ASETO_BED_CLASS_NAMES,
-                    "class_indices": aseto_indices,
-                    "conf": ASETO_DETECTION_CONF,
-                    "returns_detection": True,
-                    "model": self.aseto_model,
-                    "use_raw_frame": True,
-                    "max_area_ratio": ASETO_MAX_AREA_RATIO,
-                })
+        # Estratégia 0: COCO histEq no frame cru (melhor bbox para IR)
+        # HistEq elimina color cast IR e COCO dá bbox preciso (~40% frame)
+        histeq_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
+        if histeq_indices:
+            strategies.append({
+                "name": "coco_histEq",
+                "class_names": BED_CLASS_NAMES_SECONDARY,
+                "class_indices": histeq_indices,
+                "conf": 0.03,
+                "returns_detection": True,
+                "preprocess": "histeq",
+                "max_area_ratio": BED_MAX_AREA_RATIO,
+            })
 
-        # Estratégia 1: Primary (bed, couch)
+        # Estratégia 1: COCO no frame cru (fallback IR)
+        raw_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
+        if raw_indices:
+            strategies.append({
+                "name": "coco_raw",
+                "class_names": BED_CLASS_NAMES_SECONDARY,
+                "class_indices": raw_indices,
+                "conf": 0.03,
+                "returns_detection": True,
+                "preprocess": "raw",
+                "max_area_ratio": BED_MAX_AREA_RATIO,
+            })
+
+        # Estratégia 2: Primary no frame normalizado (bed, couch)
         primary_indices = self._resolve_class_names(BED_CLASS_NAMES_PRIMARY)
         if primary_indices:
             strategies.append({
@@ -129,7 +154,7 @@ class BedDetector:
                 "returns_detection": True,
             })
 
-        # Estratégia 2: Secondary (bed, couch, bench)
+        # Estratégia 3: Secondary (bed, couch, bench)
         secondary_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
         if secondary_indices:
             strategies.append({
@@ -140,7 +165,7 @@ class BedDetector:
                 "returns_detection": True,
             })
 
-        # Estratégia 3: Exploratory (conf baixa para cameras IR/baixa luz)
+        # Estratégia 4: Exploratory (conf baixa)
         exploratory_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
         if exploratory_indices:
             strategies.append({
@@ -352,8 +377,16 @@ class BedDetector:
 
         for strategy in self.strategies:
             model = strategy.get("model", self.model)
-            use_raw = strategy.get("use_raw_frame", False)
-            input_frame = raw_frame if (use_raw and raw_frame is not None) else frame
+            preprocess = strategy.get("preprocess")
+
+            if preprocess == "histeq" and raw_frame is not None:
+                input_frame = preprocess_ir_histeq(raw_frame)
+            elif preprocess == "raw" and raw_frame is not None:
+                input_frame = raw_frame
+            elif preprocess == "clahe_agr" and raw_frame is not None:
+                input_frame = preprocess_ir_for_aseto(raw_frame)
+            else:
+                input_frame = frame
 
             results = model.predict(
                 input_frame,
@@ -424,8 +457,8 @@ class BedDetector:
             "timestamp": time.time(),
             "detected_class": self.detected_class_name,
             "detected_strategy": self.detected_strategy,
-            "confidence": self.detected_confidence,
-            "score": self.detected_score,
+            "confidence": float(self.detected_confidence),
+            "score": float(self.detected_score),
         }
 
         with open(self.reference_path, "w") as f:
