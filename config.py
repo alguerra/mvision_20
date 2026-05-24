@@ -81,7 +81,7 @@ YOLO_BED_MODEL = "yolov8l.pt"
 # Roda no frame CRU (antes da normalização IR) — confiança maior sem pré-processamento
 YOLO_ASETO_MODEL = "aseto_v3_best.pt"
 ASETO_BED_CLASS_NAMES = ["Hospital Bed"]
-ASETO_DETECTION_CONF = 0.15
+ASETO_DETECTION_CONF = 0.05
 
 # Estratégia 1 (primária): classes mais prováveis
 BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
