@@ -785,6 +785,10 @@ class PoseStateMachineEMA:
         self._grace_counter = 0
         self._in_grace_period = False
 
+        # Confirmacao multi-frame para ACOMPANHADO (evita falsos por deteccao duplicada)
+        self._multi_person_frames = 0
+        self._multi_person_frames_required = 5
+
 
     def update(
         self,
@@ -803,16 +807,18 @@ class PoseStateMachineEMA:
         Returns:
             Estado atual
         """
-        # Se mais de uma pessoa, nao podemos monitorar com seguranca
-        # Com paciente confirmado: transita para ACOMPANHADO
-        # Sem paciente confirmado (AGUARDANDO): decai scores para nao acumular
+        # Se mais de uma pessoa, exige confirmacao multi-frame antes de transitar
         if person_count > 1:
             self._frames_without_person = 0
+            self._multi_person_frames += 1
             if self.patient_confirmed and self.current_state != self.ACOMPANHADO:
-                self.current_state = self.ACOMPANHADO
+                if self._multi_person_frames >= self._multi_person_frames_required:
+                    self.current_state = self.ACOMPANHADO
             elif not self.patient_confirmed:
                 self._decay_all_scores()
             return self.current_state
+        else:
+            self._multi_person_frames = 0
 
         # Saindo de ACOMPANHADO quando volta a 1 pessoa (ou 0)
         # Inicia período de graça para estabilização da cena

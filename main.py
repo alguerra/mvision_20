@@ -412,6 +412,32 @@ def calibrate_bed(
     return None
 
 
+def _filter_overlapping_boxes(boxes_xyxy: np.ndarray, iou_threshold: float = 0.4) -> list:
+    """Filtra bboxes sobrepostas mantendo a de maior area (evita contar mesma pessoa 2x)."""
+    if len(boxes_xyxy) <= 1:
+        return list(range(len(boxes_xyxy)))
+
+    areas = (boxes_xyxy[:, 2] - boxes_xyxy[:, 0]) * (boxes_xyxy[:, 3] - boxes_xyxy[:, 1])
+    order = areas.argsort()[::-1]
+    keep = []
+
+    while len(order) > 0:
+        i = order[0]
+        keep.append(i)
+        if len(order) == 1:
+            break
+        rest = order[1:]
+        xx1 = np.maximum(boxes_xyxy[i, 0], boxes_xyxy[rest, 0])
+        yy1 = np.maximum(boxes_xyxy[i, 1], boxes_xyxy[rest, 1])
+        xx2 = np.minimum(boxes_xyxy[i, 2], boxes_xyxy[rest, 2])
+        yy2 = np.minimum(boxes_xyxy[i, 3], boxes_xyxy[rest, 3])
+        inter = np.maximum(0, xx2 - xx1) * np.maximum(0, yy2 - yy1)
+        iou = inter / (areas[i] + areas[rest] - inter)
+        order = rest[iou < iou_threshold]
+
+    return keep
+
+
 def _kill_previous_camera_processes() -> None:
     """
     Mata instancias anteriores de main.py que possam estar segurando a camera.
@@ -661,7 +687,14 @@ def run_monitoring_loop(
                 keypoints_data = results[0].keypoints
 
                 if keypoints_data.xy is not None and len(keypoints_data.xy) > 0:
-                    person_count = len(keypoints_data.xy)
+                    # Filtra deteccoes duplicadas (bboxes sobrepostas da mesma pessoa)
+                    raw_count = len(keypoints_data.xy)
+                    if raw_count > 1 and results[0].boxes is not None and len(results[0].boxes) >= raw_count:
+                        boxes_xyxy = results[0].boxes.xyxy.cpu().numpy()
+                        keep = _filter_overlapping_boxes(boxes_xyxy, iou_threshold=0.4)
+                        person_count = len(keep)
+                    else:
+                        person_count = raw_count
 
                     if person_count == 1:
                         keypoints = keypoints_data.xy[0].cpu().numpy()
