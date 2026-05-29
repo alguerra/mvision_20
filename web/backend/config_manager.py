@@ -56,6 +56,7 @@ def get_system_settings() -> dict:
         "EMA_ALPHA": 0.3,
         "EMA_THRESHOLD_ENTER_RISK": 0.5,
         "EMA_THRESHOLD_EXIT_RISK": 0.3,
+        "BED_DETECTION_SENSITIVITY": 5,
     }
 
     if not SYSTEM_CONFIG_PATH.exists():
@@ -72,7 +73,7 @@ def get_system_settings() -> dict:
                 settings[key] = match.group(1) == "True"
 
         # Parse numeric settings
-        for key in ["BED_RECHECK_INTERVAL_HOURS", "POSE_FRAMES_TO_CONFIRM"]:
+        for key in ["BED_RECHECK_INTERVAL_HOURS", "POSE_FRAMES_TO_CONFIRM", "BED_DETECTION_SENSITIVITY"]:
             match = re.search(rf'^{key}\s*=\s*(\d+)', content, re.MULTILINE)
             if match:
                 settings[key] = int(match.group(1))
@@ -113,7 +114,7 @@ def save_system_settings(settings: dict) -> tuple[bool, str]:
                 )
 
         # Update integer settings
-        for key in ["BED_RECHECK_INTERVAL_HOURS", "POSE_FRAMES_TO_CONFIRM"]:
+        for key in ["BED_RECHECK_INTERVAL_HOURS", "POSE_FRAMES_TO_CONFIRM", "BED_DETECTION_SENSITIVITY"]:
             if key in settings:
                 value = int(settings[key])
                 content = re.sub(

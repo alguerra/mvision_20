@@ -24,10 +24,12 @@ from config import (
     BED_CLASS_NAMES,
     BED_CLASS_NAMES_PRIMARY,
     BED_CLASS_NAMES_SECONDARY,
+    BED_DETECTION_CONF_COCO,
     BED_DETECTION_CONF_FALLBACK,
     BED_DETECTION_CONF_PRIMARY,
     BED_DETECTION_CONF_SECONDARY,
     BED_DETECTION_DIAGNOSTIC,
+    BED_DETECTION_SENSITIVITY,
     BED_MAX_AREA_RATIO,
     BED_MIN_AREA_RATIO,
     BED_RECHECK_INTERVAL_HOURS,
@@ -104,6 +106,14 @@ class BedDetector:
 
         return indices
 
+    @staticmethod
+    def _apply_sensitivity(base_conf: float) -> float:
+        sensitivity = max(1, min(10, BED_DETECTION_SENSITIVITY))
+        # Level 1 (rigoroso)=4x base, Level 10 (sensivel)=0.3x base
+        # COCO 0.10: range 0.40 (nivel 1) -> 0.03 (nivel 10)
+        multiplier = 4.0 - (sensitivity - 1) * 3.7 / 9.0
+        return max(0.01, min(0.50, base_conf * multiplier))
+
     def _build_strategies(self) -> List[Dict]:
         """
         Constrói lista ordenada de estratégias de detecção.
@@ -124,7 +134,7 @@ class BedDetector:
                 "name": "coco_histEq",
                 "class_names": BED_CLASS_NAMES_SECONDARY,
                 "class_indices": histeq_indices,
-                "conf": 0.03,
+                "conf": self._apply_sensitivity(BED_DETECTION_CONF_COCO),
                 "returns_detection": True,
                 "preprocess": "histeq",
                 "max_area_ratio": BED_MAX_AREA_RATIO,
@@ -137,7 +147,7 @@ class BedDetector:
                 "name": "coco_raw",
                 "class_names": BED_CLASS_NAMES_SECONDARY,
                 "class_indices": raw_indices,
-                "conf": 0.03,
+                "conf": self._apply_sensitivity(BED_DETECTION_CONF_COCO),
                 "returns_detection": True,
                 "preprocess": "raw",
                 "max_area_ratio": BED_MAX_AREA_RATIO,
@@ -150,7 +160,7 @@ class BedDetector:
                 "name": "primary",
                 "class_names": BED_CLASS_NAMES_PRIMARY,
                 "class_indices": primary_indices,
-                "conf": BED_DETECTION_CONF_PRIMARY,
+                "conf": self._apply_sensitivity(BED_DETECTION_CONF_PRIMARY),
                 "returns_detection": True,
             })
 
@@ -161,7 +171,7 @@ class BedDetector:
                 "name": "secondary",
                 "class_names": BED_CLASS_NAMES_SECONDARY,
                 "class_indices": secondary_indices,
-                "conf": BED_DETECTION_CONF_SECONDARY,
+                "conf": self._apply_sensitivity(BED_DETECTION_CONF_SECONDARY),
                 "returns_detection": True,
             })
 
@@ -172,7 +182,7 @@ class BedDetector:
                 "name": "exploratory",
                 "class_names": BED_CLASS_NAMES_SECONDARY,
                 "class_indices": exploratory_indices,
-                "conf": BED_DETECTION_CONF_FALLBACK,
+                "conf": self._apply_sensitivity(BED_DETECTION_CONF_FALLBACK),
                 "returns_detection": True,
             })
 

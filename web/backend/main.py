@@ -87,6 +87,7 @@ class SystemSettings(BaseModel):
     EMA_ALPHA: Optional[float] = None
     EMA_THRESHOLD_ENTER_RISK: Optional[float] = None
     EMA_THRESHOLD_EXIT_RISK: Optional[float] = None
+    BED_DETECTION_SENSITIVITY: Optional[int] = None
 
 
 # ============== Dependencies ==============

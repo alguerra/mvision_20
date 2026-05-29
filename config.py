@@ -82,6 +82,7 @@ YOLO_BED_MODEL = "yolov8l.pt"
 YOLO_ASETO_MODEL = "aseto_v3_best.pt"
 ASETO_BED_CLASS_NAMES = ["Hospital Bed"]
 ASETO_DETECTION_CONF = 0.05
+BED_DETECTION_SENSITIVITY = 5  # 1=rigoroso, 10=muito sensivel, 5=padrao
 
 # Estratégia 1 (primária): classes mais prováveis
 BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
@@ -89,7 +90,7 @@ BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
 BED_CLASS_NAMES_SECONDARY = ["bed", "couch", "bench"]
 
 # Confiança mínima por estratégia
-# Confiança mínima por estratégia
+BED_DETECTION_CONF_COCO = 0.10       # Base para estrategias COCO histEq/raw
 BED_DETECTION_CONF_PRIMARY = 0.15
 BED_DETECTION_CONF_SECONDARY = 0.10
 BED_DETECTION_CONF_FALLBACK = 0.05   # Confiança minima para cameras IR/baixa luz

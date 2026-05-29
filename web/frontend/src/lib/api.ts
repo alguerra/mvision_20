@@ -20,6 +20,7 @@ export interface SystemSettings {
   EMA_ALPHA: number;
   EMA_THRESHOLD_ENTER_RISK: number;
   EMA_THRESHOLD_EXIT_RISK: number;
+  BED_DETECTION_SENSITIVITY: number;
 }
 
 export interface SystemInfo {

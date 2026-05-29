@@ -195,6 +195,38 @@ export function SystemSettings({ onBack }: SystemSettingsProps) {
                 </div>
               </div>
 
+              {/* Bed Detection Sensitivity */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                  Sensibilidade de Deteccao de Leito
+                </h3>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="bed_sensitivity">Sensibilidade</Label>
+                    <span className="text-sm font-mono text-muted-foreground">
+                      {settings.BED_DETECTION_SENSITIVITY}/10
+                    </span>
+                  </div>
+                  <input
+                    id="bed_sensitivity"
+                    type="range"
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={settings.BED_DETECTION_SENSITIVITY}
+                    onChange={(e) => handleNumberChange('BED_DETECTION_SENSITIVITY', e.target.value)}
+                    className="w-full accent-primary"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Rigoroso (menos falsos)</span>
+                    <span>Sensivel (mais deteccoes)</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Padrao: 5. Aumentar se a cama nao e detectada. Diminuir se ha falsos positivos. Requer recalibracao.
+                  </p>
+                </div>
+              </div>
+
               {/* EMA Settings */}
               <div className="space-y-4">
                 <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
