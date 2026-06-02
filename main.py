@@ -620,6 +620,8 @@ def run_monitoring_loop(
     # Loop Principal de Monitoramento
     while True:
         try:
+            frame_start = time.time()
+
             # Envia heartbeat periodicamente
             if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
                 send_heartbeat()
@@ -790,7 +792,11 @@ def run_monitoring_loop(
             # Frame processado com sucesso — reset contador de erros de processamento
             consecutive_processing_errors = 0
 
-            time.sleep(FRAME_DELAY_SECONDS)
+            # Sleep adaptativo: só dorme o necessário para atingir o ciclo alvo
+            elapsed = time.time() - frame_start
+            remaining = FRAME_DELAY_SECONDS - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
 
         except KeyboardInterrupt:
             logger.info("Interrompido pelo usuario (Ctrl+C)")

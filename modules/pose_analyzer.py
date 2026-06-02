@@ -26,6 +26,8 @@ from config import (
     EMA_THRESHOLD_PATIENT_DETECTED,
     EMA_THRESHOLD_PATIENT_LOST,
     GRACE_PERIOD_AFTER_ACOMPANHADO,
+    MULTI_PERSON_MAJORITY_MIN,
+    MULTI_PERSON_WINDOW_SIZE,
     KP_LEFT_ANKLE,
     KP_LEFT_HIP,
     KP_LEFT_KNEE,
@@ -43,6 +45,8 @@ from config import (
     POSE_CONFIDENCE_MIN,
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
+    POSE_MAJORITY_MIN,
+    POSE_WINDOW_SIZE,
     SITTING_ANGLE_THRESHOLD,
     SITTING_MIN_ASPECT_RATIO,
     TORSO_RATIO_MIN_FOR_LYING,
@@ -775,19 +779,17 @@ class PoseStateMachineEMA:
         self._frames_without_person = 0
         self._frames_to_lose_patient = 15  # Frames sem pessoa para considerar paciente perdido
 
-        # Contadores para exigir persistencia de pose (evita artefatos de 1-2 frames)
-        self._pose_frames_required = 3  # Frames consecutivos para confirmar pose
-        self._standing_frames = 0
-        self._sitting_frames = 0
+        # Sliding window para confirmação por maioria (evita reset por oscilação isolada)
+        self._standing_window = deque(maxlen=POSE_WINDOW_SIZE)
+        self._sitting_window = deque(maxlen=POSE_WINDOW_SIZE)
 
         # Período de graça após sair de ACOMPANHADO
         self._grace_period_frames = GRACE_PERIOD_AFTER_ACOMPANHADO
         self._grace_counter = 0
         self._in_grace_period = False
 
-        # Confirmacao multi-frame para ACOMPANHADO (evita falsos por deteccao duplicada)
-        self._multi_person_frames = 0
-        self._multi_person_frames_required = 5
+        # Sliding window para ACOMPANHADO (evita falsos por deteccao duplicada)
+        self._multi_person_window = deque(maxlen=MULTI_PERSON_WINDOW_SIZE)
 
 
     def update(
@@ -807,18 +809,16 @@ class PoseStateMachineEMA:
         Returns:
             Estado atual
         """
-        # Se mais de uma pessoa, exige confirmacao multi-frame antes de transitar
+        # Se mais de uma pessoa, exige maioria na janela antes de transitar
+        self._multi_person_window.append(person_count > 1)
         if person_count > 1:
             self._frames_without_person = 0
-            self._multi_person_frames += 1
             if self.patient_confirmed and self.current_state != self.ACOMPANHADO:
-                if self._multi_person_frames >= self._multi_person_frames_required:
+                if self._majority_vote(self._multi_person_window, MULTI_PERSON_MAJORITY_MIN):
                     self.current_state = self.ACOMPANHADO
             elif not self.patient_confirmed:
                 self._decay_all_scores()
             return self.current_state
-        else:
-            self._multi_person_frames = 0
 
         # Saindo de ACOMPANHADO quando volta a 1 pessoa (ou 0)
         # Inicia período de graça para estabilização da cena
@@ -828,6 +828,8 @@ class PoseStateMachineEMA:
             self.patient_confirmed = False
             self._in_grace_period = True
             self._grace_counter = self._grace_period_frames
+            self._standing_window.clear()
+            self._sitting_window.clear()
             return self.current_state
 
         # Rastreia frames sem pessoa detectada
@@ -893,19 +895,12 @@ class PoseStateMachineEMA:
             analysis.all_monitored_in_bed
         ) else 0.0
 
-        # Contadores de persistencia de pose (evita artefatos de 1-2 frames)
-        if analysis.is_standing is True:
-            self._standing_frames += 1
-        else:
-            self._standing_frames = 0
+        # Sliding window de persistencia de pose (maioria na janela, tolerante a oscilação)
+        self._standing_window.append(analysis.is_standing is True)
+        self._sitting_window.append(analysis.is_sitting is True)
 
-        if analysis.is_sitting is True:
-            self._sitting_frames += 1
-        else:
-            self._sitting_frames = 0
-
-        standing_confirmed = self._standing_frames >= self._pose_frames_required
-        sitting_confirmed = self._sitting_frames >= self._pose_frames_required
+        standing_confirmed = self._majority_vote(self._standing_window, POSE_MAJORITY_MIN)
+        sitting_confirmed = self._majority_vote(self._sitting_window, POSE_MAJORITY_MIN)
 
         # Pessoa em pe confirmada: override de sinais
         if standing_confirmed:
@@ -978,6 +973,10 @@ class PoseStateMachineEMA:
         self._update_state_from_scores(person_count)
 
         return self.current_state
+
+    def _majority_vote(self, window: deque, min_count: int) -> bool:
+        """Retorna True se pelo menos min_count elementos da janela sao True."""
+        return sum(window) >= min_count
 
     def _ema(self, previous: float, current: float) -> float:
         """Calcula Media Movel Exponencial."""
@@ -1110,7 +1109,8 @@ class PoseStateMachineEMA:
         self.score_out = 0.0
         self.score_safe = 0.0
         self._frames_without_person = 0
-        self._standing_frames = 0
-        self._sitting_frames = 0
+        self._standing_window.clear()
+        self._sitting_window.clear()
+        self._multi_person_window.clear()
         self._grace_counter = 0
         self._in_grace_period = False

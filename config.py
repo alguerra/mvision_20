@@ -15,7 +15,7 @@ FEATURE_BUFFER_SIZE = 15
 YOLO_MODEL = "yolov8n.pt"
 
 # Modelo YOLOv8-Pose para detecção de keypoints
-YOLO_POSE_MODEL = "yolov8s-pose.pt"
+YOLO_POSE_MODEL = "yolov8n-pose.pt"
 YOLO_POSE_CONFIDENCE = 0.20        # Confiança mínima para detecção de pessoas (default YOLO: 0.25)
 
 # Thresholds de confiança para keypoints
@@ -35,6 +35,12 @@ EMA_THRESHOLD_EXIT_OUT = 0.3      # Score para sair de PACIENTE_FORA
 EMA_THRESHOLD_EXIT_SAFE = 0.5    # Score minimo de safe para sair de RISCO/FORA (mais exigente que exit_risk)
 EMA_THRESHOLD_PATIENT_DETECTED = 0.8  # Score para confirmar paciente na cama
 EMA_THRESHOLD_PATIENT_LOST = 0.15     # Score para considerar paciente perdido (muito baixo)
+
+# Sliding window para confirmação por maioria (substitui contagem consecutiva)
+POSE_WINDOW_SIZE = 5              # Janela para standing/sitting
+POSE_MAJORITY_MIN = 4             # Mínimo de votos para confirmar pose (4 de 5)
+MULTI_PERSON_WINDOW_SIZE = 7      # Janela para ACOMPANHADO (maior = mais robusto)
+MULTI_PERSON_MAJORITY_MIN = 5     # Mínimo de votos para confirmar multi-pessoa (5 de 7)
 
 # Detecção de pessoa em pé (evita falso positivo com passante)
 PERSON_BBOX_ASPECT_RATIO_UPRIGHT = 1.6   # height/width do bbox: acima = em pé (1.6 para incluir crianças/corpo parcial)
