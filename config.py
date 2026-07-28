@@ -114,6 +114,14 @@ ASETO_BED_CLASS_NAMES = ["Hospital Bed"]
 ASETO_DETECTION_CONF = 0.05
 BED_DETECTION_SENSITIVITY = 5  # 1=rigoroso, 10=muito sensivel, 5=padrao
 
+# Validacao cruzada da calibracao com o ASETO (fine-tuned para cama hospitalar).
+# O bbox encontrado pelo COCO so e aceito se sobrepoe uma deteccao do ASETO —
+# protege contra calibrar na poltrona/sofa ("couch"/"bench" do COCO).
+# Fail-open: se o ASETO estiver ausente ou nao detectar nada, aceita com aviso
+# (a validacao nao pode impedir a calibracao quando o ASETO estiver cego).
+ASETO_VALIDATION_ENABLED = True
+ASETO_VALIDATION_MIN_IOU = 0.25   # Generoso: bbox do ASETO V3 e impreciso
+
 # Estratégia 1 (primária): classes mais prováveis
 BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
 # Estratégia 2 (secundária): inclui bench (macas metálicas simples)

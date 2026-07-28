@@ -14,6 +14,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import _filter_overlapping_boxes, _select_patient_index
+from modules.bed_detector import BedDetector
 
 FRAME_SHAPE = (480, 640, 3)
 BED_BBOX = (200, 250, 600, 470)
@@ -67,6 +68,36 @@ class TestPatientSelection(unittest.TestCase):
         last_centroid = (500.0, 350.0)  # perto da deteccao 1
         idx = _select_patient_index(boxes, [0, 1], BED_BBOX, last_centroid, FRAME_SHAPE)
         self.assertEqual(idx, 1)
+
+
+class TestAsetoValidation(unittest.TestCase):
+    """Validacao cruzada COCO x ASETO na calibracao da cama."""
+
+    def setUp(self):
+        self.detector = BedDetector()  # sem modelos (lazy)
+
+    def test_iou(self):
+        self.assertAlmostEqual(
+            BedDetector._bbox_iou((0, 0, 10, 10), (0, 0, 10, 10)), 1.0)
+        self.assertEqual(
+            BedDetector._bbox_iou((0, 0, 10, 10), (20, 20, 30, 30)), 0.0)
+
+    def test_candidate_overlapping_aseto_is_validated(self):
+        candidate = (250, 280, 560, 450)
+        aseto = [(230, 260, 580, 470)]  # ASETO ve a cama no mesmo lugar
+        self.assertTrue(self.detector._candidate_validated_by_aseto(candidate, aseto))
+
+    def test_candidate_on_armchair_is_rejected(self):
+        # COCO detectou a poltrona ("couch"); ASETO ve a cama em outro lugar
+        candidate = (20, 100, 160, 300)
+        aseto = [(250, 280, 560, 450)]
+        self.assertFalse(self.detector._candidate_validated_by_aseto(candidate, aseto))
+
+    def test_fail_open_when_aseto_unavailable_or_blind(self):
+        candidate = (20, 100, 160, 300)
+        # None = ASETO indisponivel; [] = ASETO rodou e nao viu nada
+        self.assertTrue(self.detector._candidate_validated_by_aseto(candidate, None))
+        self.assertTrue(self.detector._candidate_validated_by_aseto(candidate, []))
 
 
 if __name__ == "__main__":

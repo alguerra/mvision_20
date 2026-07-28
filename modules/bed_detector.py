@@ -21,6 +21,9 @@ from config import (
     ASETO_BED_CLASS_NAMES,
     ASETO_DETECTION_CONF,
     ASETO_MAX_AREA_RATIO,
+    ASETO_VALIDATION_ENABLED,
+    ASETO_VALIDATION_MIN_IOU,
+    YOLO_ASETO_MODEL,
     BED_CLASS_NAMES,
     BED_CLASS_NAMES_PRIMARY,
     BED_CLASS_NAMES_SECONDARY,
@@ -98,16 +101,31 @@ class BedDetector:
         self.bed_class_indices = self._resolve_class_names(BED_CLASS_NAMES)
         self.strategies = self._build_strategies()
 
+        # ASETO (fine-tuned p/ cama hospitalar) como VALIDADOR cruzado da
+        # calibracao — o bbox dele e impreciso, mas ele sabe o que e uma cama
+        # hospitalar; o COCO da o bbox, o ASETO confirma o objeto
+        if ASETO_VALIDATION_ENABLED and self.aseto_model is None:
+            aseto_path = Path(YOLO_ASETO_MODEL)
+            if aseto_path.exists():
+                try:
+                    self.aseto_model = YOLO(str(aseto_path))
+                    print(f"[BedDetector] Modelo ASETO carregado (validacao cruzada)")
+                except Exception as e:
+                    print(f"[BedDetector] Falha ao carregar ASETO ({e}) - validacao desativada")
+            else:
+                print(f"[BedDetector] ASETO nao encontrado em {YOLO_ASETO_MODEL} - validacao desativada")
+
     def release_model(self) -> None:
-        """Libera o modelo de cama da memoria apos calibracao/recheck."""
-        if self.model is None:
+        """Libera os modelos de cama da memoria apos calibracao/recheck."""
+        if self.model is None and self.aseto_model is None:
             return
         import gc
         self.model = None
+        self.aseto_model = None
         self.strategies = []
         self.bed_class_indices = []
         gc.collect()
-        print("[BedDetector] Modelo de cama liberado da memoria")
+        print("[BedDetector] Modelos de cama liberados da memoria")
 
     def _resolve_class_names(self, class_names: list) -> list:
         """Resolve nomes de classes para índices usando model.names (COCO)."""
@@ -366,6 +384,69 @@ class BedDetector:
             print(f"    [{strategy_name}] {class_name}: conf={confidence:.3f} "
                   f"bbox={bbox_str} area={area_pct:.1f}% score={score:.3f}")
 
+    @staticmethod
+    def _bbox_iou(a: Tuple[float, float, float, float],
+                  b: Tuple[float, float, float, float]) -> float:
+        """IoU entre dois bboxes (x1, y1, x2, y2)."""
+        ix1 = max(a[0], b[0])
+        iy1 = max(a[1], b[1])
+        ix2 = min(a[2], b[2])
+        iy2 = min(a[3], b[3])
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        if inter <= 0:
+            return 0.0
+        area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+        area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    def _get_aseto_boxes(self, raw_frame: Optional[np.ndarray]) -> Optional[List[Tuple]]:
+        """
+        Roda o ASETO no frame cru e no pre-processado agressivo.
+
+        Returns:
+            Lista de bboxes detectados (pode ser vazia), ou None se a
+            validacao estiver indisponivel (sem modelo/frame/erro).
+        """
+        if self.aseto_model is None or raw_frame is None:
+            return None
+        boxes = []
+        try:
+            for input_frame in (raw_frame, preprocess_ir_for_aseto(raw_frame)):
+                results = self.aseto_model.predict(
+                    input_frame, conf=ASETO_DETECTION_CONF, verbose=False
+                )
+                if len(results) > 0 and results[0].boxes is not None:
+                    for i in range(len(results[0].boxes)):
+                        boxes.append(tuple(results[0].boxes.xyxy[i].cpu().numpy()))
+        except Exception:
+            return None
+        return boxes
+
+    def _candidate_validated_by_aseto(
+        self,
+        bbox: Tuple[int, int, int, int],
+        aseto_boxes: Optional[List[Tuple]],
+    ) -> bool:
+        """
+        Valida o bbox candidato do COCO contra as deteccoes do ASETO.
+
+        Protege contra calibrar na poltrona/sofa: se o ASETO enxerga a cama
+        hospitalar em outro lugar, o candidato sem sobreposicao e rejeitado.
+        Fail-open: ASETO indisponivel ou cego -> aceita (a validacao nao pode
+        impedir a calibracao).
+        """
+        if aseto_boxes is None:
+            return True
+        if not aseto_boxes:
+            print("    [aseto] Nenhuma deteccao ASETO - validacao inconclusiva (aceitando)")
+            return True
+        best_iou = max(self._bbox_iou(bbox, ab) for ab in aseto_boxes)
+        validated = best_iou >= ASETO_VALIDATION_MIN_IOU
+        print(f"    [aseto] IoU maximo candidato vs ASETO: {best_iou:.2f} -> "
+              f"{'validado' if validated else 'REJEITADO'}")
+        return validated
+
     def detect_bed(
         self,
         frame: np.ndarray,
@@ -413,6 +494,11 @@ class BedDetector:
         frame_height, frame_width = frame.shape[:2]
         do_log = diagnostic or BED_DETECTION_DIAGNOSTIC
 
+        # Deteccoes ASETO calculadas sob demanda (no primeiro candidato) e
+        # reaproveitadas entre estrategias
+        aseto_boxes: Optional[List[Tuple]] = None
+        aseto_checked = False
+
         for strategy in self.strategies:
             model = strategy.get("model", self.model)
             preprocess = strategy.get("preprocess")
@@ -456,6 +542,18 @@ class BedDetector:
                 )
                 if best is not None:
                     bbox, class_name, confidence, score = best
+
+                    # Validacao cruzada: o COCO da o bbox, o ASETO confirma
+                    # que o objeto e mesmo a cama hospitalar
+                    if ASETO_VALIDATION_ENABLED:
+                        if not aseto_checked:
+                            aseto_boxes = self._get_aseto_boxes(raw_frame)
+                            aseto_checked = True
+                        if not self._candidate_validated_by_aseto(bbox, aseto_boxes):
+                            if do_log:
+                                print(f"    [{strategy['name']}] Candidato {class_name} "
+                                      f"rejeitado pela validacao ASETO - tentando proxima estrategia")
+                            continue
 
                     if do_log:
                         print(f"    >>> Selecionada: {class_name} via estrategia "

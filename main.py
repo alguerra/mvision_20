@@ -795,8 +795,14 @@ def run_monitoring_loop(
             # Normaliza frame para cameras IR (remove distorcao de cor)
             frame = normalize_frame_for_ir(frame)
 
-            # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION)
-            if not DEV_SKIP_BED_DETECTION and bed_detector.needs_recheck():
+            # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION).
+            # Gate pela FSM: so recalibra com a CAMA VAZIA — paciente/cobertor
+            # distorcem a deteccao (diretriz de campo: calibrar sem paciente).
+            # Se o leito ficar ocupado por dias, o recheck simplesmente espera.
+            if (not DEV_SKIP_BED_DETECTION
+                    and bed_detector.needs_recheck()
+                    and pose_fsm.current_state == PoseStateMachineEMA.AGUARDANDO
+                    and last_person_count == 0):
                 # Evento raro (a cada horas): carrega o modelo de cama, roda e
                 # libera. Heartbeat antes/depois pois o stall e de varios segundos
                 send_heartbeat()
