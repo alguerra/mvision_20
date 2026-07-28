@@ -84,6 +84,27 @@ Complementa `AUDITORIA_2026-07.md`. Cada item segue o formato **problema → sol
 | **P1.6 Relógio offline** | Timestamps errados pós-reboot (C11) | RTC DS3231 (I2C, ~R$15) + `hwclock` no boot — recomendação forte para dispositivo clínico; fallback `fake-hwclock` + campo `clock_synced` no log | Reboot sem rede → timestamps ±2 s |
 | **P1.7 Dinâmica de queda (shadow)** | Sem velocidade/trajetória (A8) | Velocidade vertical do quadril/pescoço normalizada pela altura do bbox; queda = deslocamento >0.5×bbox em <1 s + bbox horizontalizado → boost no `signal_out`. Rodar em **modo shadow** (loga score, não alerta) durante o piloto; ativar após análise | ≥80% das quedas encenadas detectadas pelo score antes do sinal geométrico; 0 disparos em 72 h sem queda |
 | **P1.8 Troca obrigatória de senha na UI** | Backend já sinaliza `must_change_password`; frontend não força | Rebuild do frontend com redirect para troca de senha quando a flag vier no login | Login com senha padrão → tela de troca obrigatória |
+| **P1.9 Calibração assistida da cama** | Detecção de cama hospitalar em IR opera no limite (sensibilidade 10 = conf 0.03); risco de calibrar na poltrona; sem confirmação humana | Ver seção dedicada abaixo | Instalação só conclui com bbox aprovado pelo instalador |
+| **P1.10 Benchmark IR de detecção de cama** | Todo o tuning (slider, estratégias, pré-processamentos) é empírico, sem medição | Montar dataset de 100–200 frames IR reais anotados (dia/noite, com/sem paciente, frontal/lateral) a partir de `debug_capture.py`; medir taxa de acerto por estratégia×conf; consertar a escada de fallback (multiplicador do slider torna `primary` 0.353 mais rígida que as COCO 0.236 que a precedem) e cortar estratégias inúteis (cada uma custa segundos de yolov8l) | Conf escolhida com margem ≥3× sobre o piso; ≥95% de acerto no benchmark |
+
+### P1.9 — Calibração assistida da cama (especificação)
+
+**Contexto.** A detecção da cama hospitalar é o alicerce de toda a geometria de risco — e é o elo mais frágil da cadeia: o COCO não conhece "cama hospitalar" (usa `bed/couch/bench` sobre imagem IR fora do domínio de treino), o leito de teste só detecta com sensibilidade 10 (conf efetiva 0.03, o piso do detector), e um quarto com poltrona de acompanhante pode calibrar no objeto errado. Duas proteções já foram implementadas (jul/2026):
+
+- **Gate do recheck pela FSM** (`main.py`): o recheck de 6 h só executa em `AGUARDANDO` com zero pessoas — nunca com paciente/cobertor distorcendo a cena (diretriz de campo: calibrar com cama vazia). Leito ocupado por dias: o recheck espera.
+- **Validação cruzada ASETO** (`modules/bed_detector.py`): o bbox candidato do COCO só é aceito se sobrepõe (IoU ≥ 0.25) uma detecção do ASETO — o modelo fine-tuned tem bbox impreciso, mas sabe o que é uma cama hospitalar; o COCO dá a caixa, o ASETO confirma o objeto. Fail-open: ASETO ausente ou cego → aceita com aviso (a validação não pode travar a calibração). Configurável: `ASETO_VALIDATION_ENABLED` / `ASETO_VALIDATION_MIN_IOU`. Custo: 2 inferências do modelo de 6 MB, apenas na calibração/recheck.
+
+**Fluxo proposto (a implementar):**
+
+1. **Instalação vira um passo formal do checklist:** câmera posicionada, cama VAZIA, iluminação do quarto em condição noturna (IR ativo) e diurna.
+2. O instalador abre o painel web → "Calibração" → o sistema captura frames e roda a detecção multi-estratégia + validação ASETO, exibindo a **foto com o bbox desenhado** e os metadados (estratégia, classe, conf, IoU ASETO, % do frame, aviso se o bbox toca a borda).
+3. O instalador **aprova ou rejeita**. Rejeitou → reposicionar câmera/ajustar sensibilidade e repetir. Aprovou → o bbox vira **referência golden** persistida em `bed_reference.json` com campo `approved_by`/`approved_at`.
+4. **Rechecks nunca substituem uma referência golden por algo diferente**: só podem refiná-la (IoU ≥ 0.5 com a golden E score superior). Divergência maior → alerta no painel ("cama possivelmente movida — recalibração assistida necessária") em vez de troca silenciosa.
+5. A instalação em cada leito do hospital só é dada como concluída com bbox aprovado nas duas condições de luz.
+
+**Backend necessário:** endpoint `POST /api/calibration/run` (dispara captura+detecção via arquivo de comando lido pelo monitor), `GET /api/calibration/preview` (imagem anotada), `POST /api/calibration/approve`. Frontend: tela de calibração (requer rebuild — agrupar com P1.8).
+
+**Aceite:** quarto simulado com poltrona ao lado da cama: calibração automática sem aprovação nunca entra em vigor; bbox aprovado sobrevive a reboot e a rechecks; mover a cama 1 m gera aviso no painel sem troca silenciosa da referência.
 
 ## FASE P2 — DURANTE/PÓS-PILOTO
 
