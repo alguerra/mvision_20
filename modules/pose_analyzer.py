@@ -12,12 +12,18 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from config import (
+    ALERT_PERSISTENT_SAFE_FRAMES,
     BED_MARGIN_BOTTOM,
     BED_MARGIN_LEFT,
     BED_MARGIN_RIGHT,
     BED_MARGIN_TOP,
+    COMPANION_ANALYSIS_ENABLED,
+    COMPANION_RISK_ENTER_BOOST,
     CONFIDENCE_EMA_ALPHA,
     EMA_ALPHA,
+    FRAMES_TO_LOSE_PATIENT,
+    OCCLUSION_EMPTY_TIMEOUT_FRAMES,
+    STATE_PUBLISH_DWELL_FRAMES,
     EMA_THRESHOLD_ENTER_OUT,
     EMA_THRESHOLD_ENTER_RISK,
     EMA_THRESHOLD_EXIT_OUT,
@@ -735,6 +741,11 @@ class PoseStateMachineEMA:
 
     Usa Media Movel Exponencial para suavizar transicoes de estado,
     reduzindo falsos positivos sem sacrificar tempo de resposta.
+
+    Principio fail-safe: um estado de alerta NUNCA e cancelado por
+    ausencia de evidencia (paciente sumiu, keypoints fracos, oclusao).
+    Nesses casos o alerta e mantido e escalado para ALERTA_PERSISTENTE,
+    saindo apenas com evidencia positiva de seguranca ou reset manual.
     """
 
     # Estados possiveis
@@ -743,6 +754,14 @@ class PoseStateMachineEMA:
     RISCO_POTENCIAL = "RISCO_POTENCIAL"
     PACIENTE_FORA = "PACIENTE_FORA"
     ACOMPANHADO = "ACOMPANHADO"
+    ALERTA_PERSISTENTE = "ALERTA_PERSISTENTE"
+
+    # Estados que representam alerta ativo (nao podem decair sem evidencia)
+    ALERT_STATES = (RISCO_POTENCIAL, PACIENTE_FORA, ALERTA_PERSISTENTE)
+
+    # Frames desde a ultima pose em pe/sentada para considerar o sumico
+    # "fisicamente plausivel" (paciente saiu andando) vs oclusao/queda
+    RECENT_UPRIGHT_FRAMES = 25
 
     def __init__(
         self,
@@ -777,19 +796,40 @@ class PoseStateMachineEMA:
 
         # Contador para rastrear frames sem deteccao de pessoa
         self._frames_without_person = 0
-        self._frames_to_lose_patient = 15  # Frames sem pessoa para considerar paciente perdido
+        self._frames_to_lose_patient = FRAMES_TO_LOSE_PATIENT
 
         # Sliding window para confirmação por maioria (evita reset por oscilação isolada)
         self._standing_window = deque(maxlen=POSE_WINDOW_SIZE)
         self._sitting_window = deque(maxlen=POSE_WINDOW_SIZE)
 
-        # Período de graça após sair de ACOMPANHADO
+        # Período de graça após sair de ACOMPANHADO (apenas modo legado)
         self._grace_period_frames = GRACE_PERIOD_AFTER_ACOMPANHADO
         self._grace_counter = 0
         self._in_grace_period = False
 
         # Sliding window para ACOMPANHADO (evita falsos por deteccao duplicada)
         self._multi_person_window = deque(maxlen=MULTI_PERSON_WINDOW_SIZE)
+
+        # Modo acompanhante: analise do paciente continua com 2+ pessoas
+        self._companion_analysis = COMPANION_ANALYSIS_ENABLED
+        self.companion_present = False
+
+        # Fail-safe: rastreio da ultima evidencia posicional do paciente
+        self._last_core_in_bed: Optional[bool] = None
+        self._frames_since_upright = self.RECENT_UPRIGHT_FRAMES + 1
+        self._frames_insufficient = 0
+
+        # Oclusao presumida na cama (paciente sumiu deitado, ex: cobertor)
+        self.occlusion_presumed = False
+        self._occlusion_frames = 0
+
+        # Saida de ALERTA_PERSISTENTE exige evidencia positiva consecutiva
+        self._persistent_safe_counter = 0
+
+        # Publicacao com dwell anti-flapping (log/UI); GPIO usa current_state
+        self.published_state = self.AGUARDANDO
+        self._pending_published: Optional[str] = None
+        self._pending_published_count = 0
 
 
     def update(
@@ -809,28 +849,39 @@ class PoseStateMachineEMA:
         Returns:
             Estado atual
         """
-        # Se mais de uma pessoa, exige maioria na janela antes de transitar
         self._multi_person_window.append(person_count > 1)
-        if person_count > 1:
-            self._frames_without_person = 0
-            if self.patient_confirmed and self.current_state != self.ACOMPANHADO:
-                if self._majority_vote(self._multi_person_window, MULTI_PERSON_MAJORITY_MIN):
-                    self.current_state = self.ACOMPANHADO
-            elif not self.patient_confirmed:
-                self._decay_all_scores()
-            return self.current_state
 
-        # Saindo de ACOMPANHADO quando volta a 1 pessoa (ou 0)
-        # Inicia período de graça para estabilização da cena
-        if self.current_state == self.ACOMPANHADO:
-            self._decay_all_scores()
-            self.current_state = self.AGUARDANDO
-            self.patient_confirmed = False
-            self._in_grace_period = True
-            self._grace_counter = self._grace_period_frames
-            self._standing_window.clear()
-            self._sitting_window.clear()
-            return self.current_state
+        if not self._companion_analysis:
+            # ----- MODO LEGADO (rollback via COMPANION_ANALYSIS_ENABLED=False) -----
+            # Multi-pessoa vira estado terminal ACOMPANHADO e cega a analise.
+            if person_count > 1:
+                self._frames_without_person = 0
+                if self.patient_confirmed and self.current_state != self.ACOMPANHADO:
+                    if self._majority_vote(self._multi_person_window, MULTI_PERSON_MAJORITY_MIN):
+                        self.current_state = self.ACOMPANHADO
+                elif not self.patient_confirmed:
+                    self._decay_all_scores()
+                return self._publish(self.current_state)
+
+            if self.current_state == self.ACOMPANHADO:
+                self._decay_all_scores()
+                self.current_state = self.AGUARDANDO
+                self.patient_confirmed = False
+                self._in_grace_period = True
+                self._grace_counter = self._grace_period_frames
+                self._standing_window.clear()
+                self._sitting_window.clear()
+                return self._publish(self.current_state)
+        else:
+            # ----- MODO ACOMPANHANTE: flag informativa, analise continua -----
+            # A pessoa-paciente e selecionada pelo chamador (associacao com a
+            # cama em main.py); aqui apenas registramos a presenca de terceiros.
+            companion_now = self._majority_vote(self._multi_person_window, MULTI_PERSON_MAJORITY_MIN)
+            if companion_now != self.companion_present:
+                self.companion_present = companion_now
+                if not companion_now:
+                    # Nao reter votos antigos apos a saida do acompanhante
+                    self._multi_person_window.clear()
 
         # Rastreia frames sem pessoa detectada
         # Logica robusta para lidar com falsos positivos intermitentes do YOLO
@@ -850,11 +901,10 @@ class PoseStateMachineEMA:
             if self._grace_counter <= 0:
                 self._in_grace_period = False
 
-        # Se nao ha analise ou nenhuma pessoa, decai todos os scores
+        # Frame sem evidencia do paciente (ninguem detectado ou sem keypoints)
         if analysis is None or body_points is None or person_count == 0:
-            self._decay_all_scores()
-            self._update_state_from_scores(person_count)
-            return self.current_state
+            self._handle_no_evidence()
+            return self._publish(self._display_state())
 
         # Paciente visivel = pontos essenciais detectados OU modo ocluso
         signal_patient_visible = 1.0 if (analysis.core_points_visible or analysis.occluded_mode) else 0.0
@@ -901,6 +951,20 @@ class PoseStateMachineEMA:
 
         standing_confirmed = self._majority_vote(self._standing_window, POSE_MAJORITY_MIN)
         sitting_confirmed = self._majority_vote(self._sitting_window, POSE_MAJORITY_MIN)
+
+        # Evidencia presente: limpa presuncao de oclusao na cama
+        self.occlusion_presumed = False
+        self._occlusion_frames = 0
+
+        # Rastreia ultima posicao conhecida do nucleo do corpo (para decidir
+        # entre oclusao presumida e sumico suspeito quando o paciente some)
+        if analysis.core_points_visible:
+            self._last_core_in_bed = bool(analysis.neck_in_bed and analysis.hip_in_bed)
+
+        if standing_confirmed or sitting_confirmed:
+            self._frames_since_upright = 0
+        elif self._frames_since_upright <= self.RECENT_UPRIGHT_FRAMES:
+            self._frames_since_upright += 1
 
         # Pessoa em pe confirmada: override de sinais
         if standing_confirmed:
@@ -969,10 +1033,14 @@ class PoseStateMachineEMA:
         self.score_out = self._ema(self.score_out, signal_out)
         self.score_safe = self._ema(self.score_safe, signal_safe)
 
-        # Atualiza estado baseado nos scores
-        self._update_state_from_scores(person_count)
+        # Evidencia positiva de seguranca no frame (usada para sair de
+        # ALERTA_PERSISTENTE — exige paciente visivel E dentro da cama)
+        safe_evidence = signal_safe >= 1.0 and signal_patient_in_bed >= 1.0
 
-        return self.current_state
+        # Atualiza estado baseado nos scores
+        self._update_state_from_scores(person_count, safe_evidence)
+
+        return self._publish(self._display_state())
 
     def _majority_vote(self, window: deque, min_count: int) -> bool:
         """Retorna True se pelo menos min_count elementos da janela sao True."""
@@ -990,8 +1058,94 @@ class PoseStateMachineEMA:
         self.score_out = self._ema(self.score_out, 0.0)
         self.score_safe = self._ema(self.score_safe, 0.0)
 
-    def _update_state_from_scores(self, person_count: int = 1) -> None:
-        """Atualiza estado baseado nos scores EMA."""
+    def _handle_no_evidence(self) -> None:
+        """
+        Trata frame sem evidencia do paciente (ninguem detectado ou pessoa
+        sem keypoints). Principio fail-safe: alerta ativo nunca decai aqui.
+        """
+        patient_lost = self._frames_without_person >= self._frames_to_lose_patient
+
+        if self.current_state in self.ALERT_STATES:
+            # FAIL-SAFE: ausencia de evidencia mantem o alerta (scores
+            # congelados) e escala para ALERTA_PERSISTENTE — o cenario tipico
+            # de queda real e o paciente sumir do enquadramento.
+            self._persistent_safe_counter = 0
+            if patient_lost and self.current_state != self.ALERTA_PERSISTENTE:
+                self.current_state = self.ALERTA_PERSISTENTE
+            return
+
+        if self.current_state == self.MONITORANDO:
+            if not patient_lost:
+                self._decay_all_scores()
+                return
+            if self._last_core_in_bed is not False and \
+                    self._frames_since_upright > self.RECENT_UPRIGHT_FRAMES:
+                # Paciente sumiu deitado dentro da cama, sem ter sentado ou
+                # levantado antes: presume oclusao (cobertor/equipamento).
+                # Mantem MONITORANDO; so assume cama vazia apos timeout longo.
+                self.occlusion_presumed = True
+                self._occlusion_frames += 1
+                if self._occlusion_frames >= OCCLUSION_EMPTY_TIMEOUT_FRAMES:
+                    self._reset_to_aguardando()
+                return
+            # Sumico com ultima posicao parcialmente fora da cama ou logo apos
+            # sentar/levantar: transicao fisicamente suspeita — fail-safe.
+            self.current_state = self.RISCO_POTENCIAL
+            return
+
+        # AGUARDANDO (ou legado): decaimento normal
+        self._decay_all_scores()
+        self._update_state_from_scores(0)
+
+    def _reset_to_aguardando(self) -> None:
+        """Retorna ao estado inicial descartando o paciente confirmado."""
+        self.current_state = self.AGUARDANDO
+        self.patient_confirmed = False
+        self.occlusion_presumed = False
+        self._occlusion_frames = 0
+        self._last_core_in_bed = None
+        self._frames_insufficient = 0
+        self._decay_all_scores()
+
+    def _display_state(self) -> str:
+        """Estado exibido: ACOMPANHADO substitui MONITORANDO quando ha visita."""
+        if (self._companion_analysis and self.companion_present
+                and self.current_state == self.MONITORANDO):
+            return self.ACOMPANHADO
+        return self.current_state
+
+    def _publish(self, candidate: str) -> str:
+        """
+        Publica transicoes com dwell minimo (anti-flapping) para log/UI.
+        Alertas criticos publicam imediatamente (fail-safe); o GPIO deve ler
+        current_state diretamente, sem dwell.
+        """
+        if candidate == self.published_state:
+            self._pending_published = None
+            self._pending_published_count = 0
+            return self.published_state
+
+        if candidate in (self.PACIENTE_FORA, self.ALERTA_PERSISTENTE):
+            self.published_state = candidate
+            self._pending_published = None
+            self._pending_published_count = 0
+            return self.published_state
+
+        if candidate != self._pending_published:
+            self._pending_published = candidate
+            self._pending_published_count = 1
+        else:
+            self._pending_published_count += 1
+
+        if self._pending_published_count >= STATE_PUBLISH_DWELL_FRAMES:
+            self.published_state = candidate
+            self._pending_published = None
+            self._pending_published_count = 0
+
+        return self.published_state
+
+    def _update_state_from_scores(self, person_count: int = 1, safe_evidence: bool = False) -> None:
+        """Atualiza estado baseado nos scores EMA (com evidencia presente)."""
 
         # Estado AGUARDANDO - esperando paciente ser detectado na cama
         if self.current_state == self.AGUARDANDO:
@@ -1000,23 +1154,20 @@ class PoseStateMachineEMA:
                 self.current_state = self.MONITORANDO
                 self.patient_confirmed = True
                 self._in_grace_period = False
+                self._frames_insufficient = 0
                 self.score_risk = 0.0
                 self.score_out = 0.0
             return
 
         # =====================================================================
         # A partir daqui, paciente ja foi confirmado (estados de monitoramento)
-        # So volta para AGUARDANDO se paciente REALMENTE desaparecer da cena
         # =====================================================================
 
-        # Verifica se perdeu o paciente completamente
-        # Criterio: nenhuma pessoa detectada por varios frames consecutivos
         patient_lost = self._frames_without_person >= self._frames_to_lose_patient
 
-        # Detecta dados insuficientes: todos os scores decairam mas nenhum
-        # sinal positivo esta sendo recebido (keypoints fracos ou deteccao ruidosa).
-        # Sem isso, RISCO_POTENCIAL/PACIENTE_FORA ficam em deadlock porque
-        # a condicao de saida exige score_safe > threshold, que nunca sobe sem sinal.
+        # Dados insuficientes: pessoa presente mas keypoints fracos/ruidosos.
+        # Em estado de alerta isso NAO cancela o alerta (fail-safe): congela e,
+        # se persistir, escala para ALERTA_PERSISTENTE.
         insufficient_data = (
             self.score_risk < 0.2 and
             self.score_out < 0.2 and
@@ -1024,13 +1175,30 @@ class PoseStateMachineEMA:
             self.score_patient_visible < 0.3
         )
 
+        # Estado ALERTA_PERSISTENTE: sai apenas com evidencia positiva
+        # consecutiva de seguranca (paciente visivel e dentro da cama)
+        if self.current_state == self.ALERTA_PERSISTENTE:
+            if safe_evidence:
+                self._persistent_safe_counter += 1
+                if self._persistent_safe_counter >= ALERT_PERSISTENT_SAFE_FRAMES:
+                    self.current_state = self.MONITORANDO
+                    self.patient_confirmed = True
+                    self._persistent_safe_counter = 0
+                    self._frames_insufficient = 0
+            else:
+                self._persistent_safe_counter = 0
+            return
+
         # Estado PACIENTE_FORA
         if self.current_state == self.PACIENTE_FORA:
-            # Volta para AGUARDANDO se paciente desaparecer ou dados insuficientes
             if patient_lost or insufficient_data:
-                self.current_state = self.AGUARDANDO
-                self.patient_confirmed = False
+                # FAIL-SAFE: sem evidencia nao ha des-escalada
+                self._frames_insufficient += 1
+                if self._frames_insufficient >= self._frames_to_lose_patient:
+                    self.current_state = self.ALERTA_PERSISTENTE
+                    self._frames_insufficient = 0
                 return
+            self._frames_insufficient = 0
 
             # Sai de PACIENTE_FORA se score de "fora" cair E paciente voltar para cama
             if self.score_out < self.threshold_exit_out and self.score_safe > self.threshold_exit_safe:
@@ -1038,19 +1206,21 @@ class PoseStateMachineEMA:
             # Ou se entrar em risco parcial
             elif self.score_out < self.threshold_exit_out and self.score_risk >= self.threshold_enter_risk:
                 self.current_state = self.RISCO_POTENCIAL
-            # Escape: score_out caiu mas safe/risk nao atingem thresholds (faixa morta)
-            # Transita para RISCO_POTENCIAL como estado intermediario seguro
-            elif self.score_out < self.threshold_exit_out:
+            # Escape da faixa morta: exige paciente visivel (senao congela)
+            elif self.score_out < self.threshold_exit_out and self.score_patient_visible >= 0.3:
                 self.current_state = self.RISCO_POTENCIAL
             return
 
         # Estado RISCO_POTENCIAL
         if self.current_state == self.RISCO_POTENCIAL:
-            # Volta para AGUARDANDO se paciente desaparecer ou dados insuficientes
             if patient_lost or insufficient_data:
-                self.current_state = self.AGUARDANDO
-                self.patient_confirmed = False
+                # FAIL-SAFE: sem evidencia nao ha des-escalada
+                self._frames_insufficient += 1
+                if self._frames_insufficient >= self._frames_to_lose_patient:
+                    self.current_state = self.ALERTA_PERSISTENTE
+                    self._frames_insufficient = 0
                 return
+            self._frames_insufficient = 0
 
             # Escala para PACIENTE_FORA se todos pontos sairem
             if self.score_out >= self.threshold_enter_out:
@@ -1062,18 +1232,24 @@ class PoseStateMachineEMA:
 
         # Estado MONITORANDO
         if self.current_state == self.MONITORANDO:
-            # Volta para AGUARDANDO se paciente desaparecer
+            # patient_lost com analise presente = pessoa visivel sem pontos
+            # confiaveis por muito tempo: evidencia fraca nao derruba paciente
+            # confirmado (o caso sem pessoa alguma e tratado em _handle_no_evidence)
             if patient_lost:
-                self.current_state = self.AGUARDANDO
-                self.patient_confirmed = False
                 return
 
-            # Suprime transições de risco durante período de graça
+            # Suprime transições de risco durante período de graça (modo legado)
             if self._in_grace_period:
                 return
 
+            # Com acompanhante presente, threshold de risco levemente mais
+            # conservador (compensa possiveis erros de associacao)
+            enter_risk = self.threshold_enter_risk
+            if self.companion_present:
+                enter_risk = min(0.95, enter_risk + COMPANION_RISK_ENTER_BOOST)
+
             # Entra em RISCO_POTENCIAL (alguns pontos fora ou sentado)
-            if self.score_risk >= self.threshold_enter_risk:
+            if self.score_risk >= enter_risk:
                 self.current_state = self.RISCO_POTENCIAL
             # Entra em PACIENTE_FORA apenas se ja passou por RISCO_POTENCIAL
             # (evita salto direto MONITORANDO->PACIENTE_FORA em 2 frames)
@@ -1100,15 +1276,25 @@ class PoseStateMachineEMA:
         return self.patient_confirmed
 
     def reset(self) -> None:
-        """Reseta maquina de estados e scores."""
+        """Reseta maquina de estados e scores (inclusive ALERTA_PERSISTENTE)."""
         self.current_state = self.AGUARDANDO
+        self.published_state = self.AGUARDANDO
         self.patient_confirmed = False
+        self.companion_present = False
+        self.occlusion_presumed = False
         self.score_patient_visible = 0.0
         self.score_patient_in_bed = 0.0
         self.score_risk = 0.0
         self.score_out = 0.0
         self.score_safe = 0.0
         self._frames_without_person = 0
+        self._frames_insufficient = 0
+        self._occlusion_frames = 0
+        self._persistent_safe_counter = 0
+        self._last_core_in_bed = None
+        self._frames_since_upright = self.RECENT_UPRIGHT_FRAMES + 1
+        self._pending_published = None
+        self._pending_published_count = 0
         self._standing_window.clear()
         self._sitting_window.clear()
         self._multi_person_window.clear()

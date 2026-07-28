@@ -35,19 +35,33 @@ class PatientMonitor:
         """
         self.bed_bbox = bed_bbox
 
-    def update(self, persons_count: int) -> None:
+    # Estados da FSM em que "Cama Vazia" NUNCA deve ser exibido: a ausencia
+    # de deteccao durante um alerta e o cenario tipico de queda real
+    ALERT_STATES = ("RISCO_POTENCIAL", "PACIENTE_FORA", "ALERTA_PERSISTENTE")
+
+    def update(self, persons_count: int, pose_state: Optional[str] = None,
+               occlusion_presumed: bool = False) -> None:
         """
         Atualiza estado do monitor baseado na contagem de pessoas.
 
         Args:
             persons_count: Número de pessoas detectadas.
+            pose_state: Estado atual da FSM de pose (fail-safe do status).
+            occlusion_presumed: Paciente presumido ocluso na cama.
         """
         self.persons_count = persons_count
         self.last_update = time.time()
 
+        if pose_state in self.ALERT_STATES:
+            self.status = "ALERTA ATIVO"
+            return
+
         if persons_count == 0:
-            self.status = "Cama Vazia"
-            self.buffer.clear()
+            if occlusion_presumed:
+                self.status = "Paciente possivelmente coberto"
+            else:
+                self.status = "Cama Vazia"
+                self.buffer.clear()
         elif persons_count > 1:
             self.status = "Acompanhado"
         else:

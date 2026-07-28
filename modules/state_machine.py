@@ -32,6 +32,7 @@ class PatientPoseState(Enum):
     RISCO_POTENCIAL = "RISCO_POTENCIAL"  # Partes do corpo fora da cama
     PACIENTE_FORA = "PACIENTE_FORA"    # Paciente fora da cama (critico)
     ACOMPANHADO = "ACOMPANHADO"        # Mais de uma pessoa, paciente acompanhado
+    ALERTA_PERSISTENTE = "ALERTA_PERSISTENTE"  # Alerta ativo sem evidencia de resolucao (critico)
 
 
 class StateMachine:
@@ -52,6 +53,7 @@ class StateMachine:
         PatientPoseState.RISCO_POTENCIAL: (0, 165, 255), # Laranja - atencao
         PatientPoseState.PACIENTE_FORA: (0, 0, 255),     # Vermelho - critico
         PatientPoseState.ACOMPANHADO: (255, 200, 0),     # Azul claro - acompanhado
+        PatientPoseState.ALERTA_PERSISTENTE: (0, 0, 180),  # Vermelho escuro - alerta persistente
     }
 
     # Thresholds para transições de estado
