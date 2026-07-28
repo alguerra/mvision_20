@@ -1,97 +1,204 @@
-# MVISION — Instalação e Atualização
+# MVISION — Passo a passo: do zero ao sistema operante
 
-Guia de entrada para instalar e atualizar o sistema. Os detalhes de cada fluxo estão nos documentos em `doc/`.
+Roteiro único e completo. Seguindo as etapas na ordem, ao final você terá o sistema instalado, configurado, calibrado e monitorando o leito. Cada etapa termina com um **✔ Ponto de verificação** — só avance se ele passou.
 
-O sistema opera **100% offline** no hospital: nenhum passo em campo depende de internet.
+> A instalação (etapas 1–5) precisa de **internet** e é feita em bancada/laboratório.
+> A operação no hospital é **100% offline** — nada em campo depende de rede externa.
 
 ---
 
-## 1. Instalação em HOSPITAL (técnico de campo)
+## O que você vai precisar
 
-O técnico **não instala software** — ele grava a imagem pronta e liga o aparelho.
+- Raspberry Pi 5 (8 GB recomendado) com case e **cooler ativo**
+- Câmera IR compatível (CSI/Picamera2) com cabo flat
+- Cartão SD 32 GB+ (produção: industrial/high-endurance)
+- Fonte oficial USB-C 27 W
+- Um computador com leitor de SD e o [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+- Rede com internet para a instalação (cabo de preferência)
+- Opcional: monitor HDMI + teclado (ou use SSH); módulo RTC DS3231; LEDs nos GPIO 16 (alerta) e 20 (pronto)
 
-| Passo | O quê | Referência |
-|---|---|---|
-| 1 | Gravar o cartão SD com a **imagem dourada** (`mvision-vX.Y.img.gz`) usando o Raspberry Pi Imager ("Use custom image") — ou receber o kit com SD já gravado | [`doc/IMAGEM_DOURADA.md`](doc/IMAGEM_DOURADA.md) §5 |
-| 2 | No leito: posicionar câmera, ligar, aguardar até 5 min (o aparelho se auto-configura e reinicia sozinho no primeiro boot) | [`doc/CHECKLIST_TECNICO.md`](doc/CHECKLIST_TECNICO.md) |
-| 3 | Abrir o painel `http://<ip>:8080`, trocar a senha (obrigatório), identificar o leito, calibrar com a **cama vazia** e conferir "Monitor ativo" | [`doc/CHECKLIST_TECNICO.md`](doc/CHECKLIST_TECNICO.md) |
+---
 
-Diagnóstico em caso de problema (suporte com terminal): `mvision-doctor` — imprime PASS/FALHA por item, em português.
+## Etapa 1 — Gravar o cartão SD
 
-## 2. Construção da imagem dourada (LABORATÓRIO, uma vez por release)
+1. Insira o SD no computador e abra o **Raspberry Pi Imager**.
+2. Selecione:
+   - **Dispositivo:** Raspberry Pi 5
+   - **Sistema:** Raspberry Pi OS (**64-bit**) — versão **Desktop**
+   - **Armazenamento:** seu cartão SD
+3. Clique em **Editar configurações** (engrenagem) e defina:
+   - Hostname: `mvision`
+   - **Habilitar SSH** (autenticação por senha)
+   - Usuário: `tmed` / senha: *(defina e anote)*
+   - WiFi (opcional — prefira cabo de rede)
+   - Localidade: fuso `America/Sao_Paulo`, teclado `br`
+4. Grave e aguarde concluir.
 
-Com internet, num Pi de bancada:
+**✔ Ponto de verificação:** o Imager mostrou "gravação concluída com sucesso".
+
+## Etapa 2 — Primeiro boot e acesso
+
+1. Insira o SD no Pi, conecte o **cabo flat da câmera** (travado nas duas pontas), o cabo de rede e por último a fonte.
+2. Aguarde ~2 min para o primeiro boot.
+3. Acesse o terminal do Pi de uma das formas:
+   - **SSH** (recomendado): `ssh tmed@mvision.local` (ou pelo IP — veja no roteador), ou
+   - Monitor HDMI + teclado, abrindo o Terminal no desktop.
+
+**✔ Ponto de verificação:** você está num prompt `tmed@mvision:~ $`.
+
+## Etapa 3 — Baixar o código e os modelos
 
 ```bash
 sudo apt update && sudo apt install -y git git-lfs
-git clone <repositorio> /mvision
-cd /mvision && git lfs pull          # obrigatório: baixa os modelos .pt reais
-sudo bash deploy/install.sh          # deve terminar em "INSTALACAO OK"
-# hardening da imagem: overlayroot + RTC (ver doc/IMAGEM_DOURADA.md §3)
-sudo bash deploy/install.sh --prepare-image   # sela o SD (limpa segredos)
-sudo poweroff                        # remover o SD SEM religar e extrair a imagem
+sudo mkdir -p /mvision && sudo chown tmed:tmed /mvision
+git clone <URL-DO-REPOSITORIO> /mvision
+cd /mvision
+git lfs pull
 ```
 
-Processo completo (extração com pishrink, versionamento, produção de unidades): [`doc/IMAGEM_DOURADA.md`](doc/IMAGEM_DOURADA.md).
+> `git lfs pull` é **obrigatório**: sem ele os modelos `.pt` ficam como ponteiros de texto e o instalador vai acusar erro.
 
-## 3. Instalação manual (LABORATÓRIO / desenvolvimento)
+**✔ Ponto de verificação:**
+```bash
+ls -lh /mvision/yolov8n-pose.pt /mvision/yolov8l.pt
+```
+Os arquivos devem ter **MB de tamanho** (ex.: 6M e 87M) — não 130 bytes.
 
-Para bancada, sem imagem dourada:
+## Etapa 4 — Instalar
 
 ```bash
 cd /mvision
 sudo bash deploy/install.sh
 ```
 
-O instalador é **idempotente** — pode ser executado quantas vezes for preciso; cada etapa verifica o estado atual e só age no que falta. Ele instala/configura: os dois serviços (`hospital-monitor`, `mvision-web`), watchdog de hardware, limite do journald, sudoers do painel, display headless, `mvision-doctor`, o atualizador USB e termina com a verificação completa. Se terminar com `INSTALACAO COM PROBLEMAS`, corrija as linhas `[ERRO]` e rode de novo.
+O instalador é **idempotente**: se algo falhar, corrija o que a linha `[ERRO]` indicar e rode o mesmo comando de novo — ele pula o que já está feito. Ele instala e configura: os serviços `hospital-monitor` e `mvision-web`, watchdog de hardware, limite de logs do sistema, regra do botão de restart do painel, display headless, o diagnóstico `mvision-doctor` e o atualizador por pendrive — e termina rodando a verificação completa.
 
-> Os antigos `install-web.sh` e `setup-display.sh` foram consolidados no `install.sh` (permanecem como atalhos). Guia manual completo de bancada (SO, SSH, Tailscale de laboratório): [`doc/INSTALACAO_RASPBERRY_PI.md`](doc/INSTALACAO_RASPBERRY_PI.md).
+**✔ Ponto de verificação:** a última seção da saída mostra **`INSTALACAO OK`**.
+(Único aviso aceitável nesta fase: "Sem referencia de cama" — a calibração vem na Etapa 6.)
 
-## 4. Atualização
-
-### Em campo (sem rede, sem terminal) — pendrive
-
-No laboratório, gere o pacote:
+## Etapa 5 — Reiniciar
 
 ```bash
-tar czf mvision-update-vX.Y.tar.gz --exclude-vcs --exclude=data .
-sha256sum mvision-update-vX.Y.tar.gz > mvision-update-vX.Y.tar.gz.sha256
+sudo reboot
 ```
 
-Copie os **dois** arquivos para a raiz de um pendrive (FAT32). No leito:
+Necessário para ativar o watchdog de hardware e o HDMI headless. Aguarde ~3 min (a primeira inicialização carrega os modelos) e confira:
+
+```bash
+ssh tmed@mvision.local
+mvision-doctor
+```
+
+**✔ Ponto de verificação:** `mvision-doctor` termina com **`SISTEMA OPERANTE`** — em especial:
+- `[PASS] hospital-monitor ativo` e `[PASS] mvision-web ativo`
+- `[PASS] Monitor publicando status ha Xs`
+- `[PASS] Camera CSI detectada`
+
+## Etapa 6 — Configurar pelo painel web
+
+1. Descubra o IP: `hostname -I` (primeiro endereço).
+2. No navegador de qualquer máquina da mesma rede: `http://<IP>:8080`
+3. Entre com a senha padrão **`mvision123`** → o sistema **exigirá criar uma senha nova**. Anote-a.
+4. Em **Configurações**, preencha **Hospital, Setor e Leito** → Salvar.
+5. Use o botão **Reiniciar serviço** do painel (ou `sudo systemctl restart hospital-monitor`) para aplicar.
+
+**✔ Ponto de verificação:** o painel mostra a identificação do leito e o status **"Monitor ativo"** (nunca "SEM SINAL").
+
+## Etapa 7 — Posicionar a câmera e calibrar a cama
+
+1. Fixe a câmera enquadrando a **cama inteira, com folga nas laterais** — a cama não pode encostar nas bordas da imagem.
+2. Deixe a **cama vazia e arrumada**, sem ninguém ao lado, com iluminação normal do quarto.
+3. Reinicie o monitor para disparar a calibração:
+   ```bash
+   sudo systemctl restart hospital-monitor
+   ```
+4. Acompanhe (opcional): `journalctl -u hospital-monitor -f` — procure a linha `Calibracao OK` com o bbox.
+5. Confira no monitor HDMI (se conectado) ou nas imagens do painel que o **retângulo cobre a cama** — não a poltrona.
+
+**✔ Ponto de verificação:**
+```bash
+mvision-doctor
+```
+→ `[PASS] Referencia da cama valida: [x1, y1, x2, y2]`
+
+> Se a calibração falhar repetidamente: ajuste o **slider de sensibilidade** no painel (aumentar = mais permissivo), confira o enquadramento e a iluminação, e reinicie o serviço. A calibração fica salva e sobrevive a reboots.
+
+## Etapa 8 — Teste funcional (com uma pessoa)
+
+Peça a alguém para simular o paciente e observe o estado no painel/monitor:
+
+| Ação | Estado esperado | Tempo |
+|---|---|---|
+| Deitar na cama e ficar parado | `MONITORANDO` | ≤ 30 s |
+| Sentar na beirada da cama | `RISCO_POTENCIAL` | segundos |
+| Levantar e sair | `PACIENTE_FORA` + LED de alerta piscando | segundos |
+| Voltar e deitar | alerta cessa → `MONITORANDO` | ≤ 30 s |
+| Segunda pessoa entra no quarto | `ACOMPANHADO` (monitoramento continua) | ~2 s |
+
+**✔ Ponto de verificação:** as cinco linhas da tabela se comportaram como esperado e os eventos aparecem no log de alertas do painel.
+
+**🎉 O sistema está instalado e operante.** Para uso em bancada/piloto supervisionado, terminou aqui.
+
+---
+
+## Etapa 9 (produção em escala) — Selar a imagem dourada
+
+Para instalar em vários leitos sem repetir tudo isso, transforme este SD em imagem master:
+
+```bash
+sudo bash /mvision/deploy/install.sh --prepare-image   # limpa segredos e identidade
+sudo poweroff                                          # NAO religue este SD antes de clonar
+```
+
+No PC de laboratório: extraia (`dd`) e comprima (`pishrink`) a imagem. Cada SD gravado com ela se auto-provisiona no primeiro boot (expande o disco, regenera identidade, reinicia) — o técnico em campo só segue o `doc/CHECKLIST_TECNICO.md` (1 página, sem terminal): ligar, trocar senha, identificar o leito e calibrar. Detalhes: `doc/IMAGEM_DOURADA.md`.
+
+> Antes de produzir a imagem de hospital, aplique também o **overlayroot** (raiz somente-leitura — proteção contra corte de energia) e o **RTC**, conforme `doc/IMAGEM_DOURADA.md` §3.
+
+---
+
+## Atualização do sistema
+
+### Em campo, sem rede (pendrive)
+
+No laboratório:
+```bash
+cd /mvision
+tar czf mvision-update-v1.1.tar.gz --exclude-vcs --exclude=data .
+sha256sum mvision-update-v1.1.tar.gz > mvision-update-v1.1.tar.gz.sha256
+```
+Copie os **dois arquivos** para a raiz de um pendrive (FAT32). No leito:
 
 **desligar da tomada → espetar o pendrive → ligar → aguardar o painel voltar (~5 min) → remover o pendrive.**
 
-O sistema valida o checksum, faz backup do código atual, aplica, roda o instalador e registra em `/var/log/mvision-usb-update.log`. Pendrive esquecido no aparelho não re-aplica a mesma versão.
+O sistema valida o checksum, faz backup, aplica e reinicia sozinho (log em `/var/log/mvision-usb-update.log`). Pendrive esquecido não re-aplica a mesma versão.
 
-### Em laboratório (com git)
+### Em bancada, com git
 
 ```bash
 cd /mvision
 bash sync_code.sh            # git fetch + reset para origin/main
-sudo bash deploy/update.sh   # reinicia AMBOS os serviços e roda o mvision-doctor
+sudo bash deploy/update.sh   # reinicia OS DOIS servicos e roda o mvision-doctor
 ```
 
-> Importante: sempre reiniciar **os dois** serviços após atualizar código — `deploy/update.sh` já faz isso.
+---
 
-## 5. Verificação e operação
+## Se algo der errado
 
-| Comando | Para quê |
-|---|---|
-| `mvision-doctor` | Diagnóstico completo (serviços, câmera, modelos, calibração, disco, memória, throttling, relógio, painel, versão) |
-| `journalctl -u hospital-monitor -f` | Logs do monitor em tempo real |
-| `journalctl -u mvision-web -f` | Logs do painel |
-| `sudo systemctl restart hospital-monitor mvision-web` | Reinício manual dos serviços |
+1. **Sempre comece por:** `mvision-doctor` — ele diz exatamente o que está falhando, em português.
+2. Logs detalhados: `journalctl -u hospital-monitor -n 100` e `journalctl -u mvision-web -n 50`.
+3. Reinstalar/reparar é seguro: `sudo bash /mvision/deploy/install.sh` (idempotente).
 
-Painel web: `http://<ip>:8080` — senha padrão `mvision123` **apenas no primeiro acesso** (troca obrigatória).
+| Sintoma | Causa provável | Solução |
+|---|---|---|
+| `[FALHA] ... ponteiro Git LFS` | clone sem `git lfs pull` | `cd /mvision && git lfs pull` (com internet) e reinstalar |
+| `[FALHA] NENHUMA camera detectada` | cabo flat solto/invertido | reconectar o flat (trava nas duas pontas) e reiniciar |
+| Painel não abre | serviço web parado / IP errado | `mvision-doctor`; conferir IP com `hostname -I` |
+| "SEM SINAL do monitor" no painel | monitor travado ou câmera falhou | `journalctl -u hospital-monitor -n 100`; religar o aparelho |
+| Calibração não conclui | enquadramento/iluminação/sensibilidade | Etapa 7 + slider de sensibilidade no painel |
+| Estados oscilando/atrasados | throttling térmico | `mvision-doctor` acusa; conferir cooler e fonte 27 W |
 
-Modo desenvolvimento (nunca em produção): `MVISION_DEV=1` (salva imagens de evidência) e `MVISION_SKIP_BED=1` (pula calibração da cama) — apenas via variável de ambiente.
+**Modo desenvolvimento** (nunca em produção): `MVISION_DEV=1` (salva imagens de evidência) e `MVISION_SKIP_BED=1` (pula calibração) — somente via variável de ambiente no serviço.
 
-## 6. Requisitos de hardware (produção)
+---
 
-- Raspberry Pi 5 (8 GB recomendado) com case e **cooler ativo**
-- Câmera IR compatível (CSI/Picamera2)
-- Cartão SD **industrial/high-endurance**, 32 GB+
-- Fonte oficial USB-C 27 W
-- Recomendado: módulo RTC DS3231 (relógio correto sem rede)
-- LEDs de alerta: GPIO 16 (alerta) e GPIO 20 (sistema pronto)
+*Documentos complementares:* `doc/CHECKLIST_TECNICO.md` (instalação em campo, 1 página) · `doc/IMAGEM_DOURADA.md` (build da imagem por release) · `doc/INSTALACAO_RASPBERRY_PI.md` (referência de bancada) · `doc/ESPECIFICACAO_ROBUSTEZ.md` (especificação técnica e plano de validação).
