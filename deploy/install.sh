@@ -58,6 +58,17 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 [ -f "$PROJECT_DIR/main.py" ] && ok "main.py encontrado" || { fail "main.py nao encontrado em $PROJECT_DIR"; exit 1; }
+
+# Auto-protecao: codigo copiado do Windows (FileZilla/SFTP) pode vir com CRLF,
+# que quebra scripts e units no Linux. Normaliza tudo antes de usar.
+CRLF_COUNT=$(grep -rlI $'\r' "$SCRIPT_DIR" 2>/dev/null | wc -l)
+if [ "$CRLF_COUNT" -gt 0 ]; then
+    find "$SCRIPT_DIR" -type f \( -name '*.sh' -o -name '*.service' -o -name '*.timer' \) \
+        -exec sed -i 's/\r$//' {} +
+    ok "Fins de linha normalizados em $CRLF_COUNT arquivo(s) de deploy (CRLF -> LF)"
+else
+    ok "Fins de linha dos scripts OK"
+fi
 id "$SERVICE_USER" &>/dev/null && ok "Usuario $SERVICE_USER existe" || {
     useradd -m -s /bin/bash "$SERVICE_USER" && ok "Usuario $SERVICE_USER criado" || fail "Falha ao criar usuario $SERVICE_USER"
 }
