@@ -1,6 +1,13 @@
 """
 Configurações globais do Sistema de Monitoramento de Quedas Hospitalares.
+
+Este arquivo é somente-leitura em produção. Ajustes feitos pelo painel web
+são gravados em config/runtime_config.json e aplicados como overlay no
+final deste arquivo (ver _apply_runtime_overrides). Em caso de JSON
+corrompido/ausente, os defaults abaixo garantem o boot.
 """
+
+import os as _os
 
 # Intervalo para re-verificação da cama (em horas)
 BED_RECHECK_INTERVAL_HOURS = 6
@@ -17,6 +24,9 @@ YOLO_MODEL = "yolov8n.pt"
 # Modelo YOLOv8-Pose para detecção de keypoints
 YOLO_POSE_MODEL = "yolov8n-pose.pt"
 YOLO_POSE_CONFIDENCE = 0.20        # Confiança mínima para detecção de pessoas (default YOLO: 0.25)
+YOLO_POSE_IOU = 0.5                # NMS IoU explicito (default Ultralytics 0.7 e frouxo demais)
+YOLO_POSE_MAX_DET = 5              # Maximo de pessoas por frame (quarto hospitalar)
+YOLO_POSE_IMGSZ = 640              # Tamanho de inferencia explicito (nao depender de default)
 
 # Thresholds de confiança para keypoints
 POSE_CONFIDENCE_HIGH = 0.7        # Confiança alta (ponto confiável)
@@ -54,6 +64,20 @@ PERSON_BED_CONTAINMENT_MIN = 0.4         # Fração mínima do bbox da pessoa de
 
 # Hardening: período de graça após sair de ACOMPANHADO
 GRACE_PERIOD_AFTER_ACOMPANHADO = 10      # Frames de graça (~2 seg a 5 FPS)
+
+# Perda de paciente e comportamento fail-safe
+FRAMES_TO_LOSE_PATIENT = 15              # Frames sem pessoa para considerar paciente perdido (~3s a 5 FPS)
+OCCLUSION_EMPTY_TIMEOUT_FRAMES = 300     # Frames em oclusao presumida na cama antes de assumir cama vazia (~60s)
+ALERT_PERSISTENT_SAFE_FRAMES = 10        # Frames consecutivos de evidencia segura para sair de ALERTA_PERSISTENTE
+
+# Análise com acompanhante presente (associação pessoa-paciente por geometria)
+COMPANION_ANALYSIS_ENABLED = True        # False = comportamento legado (ACOMPANHADO cega a analise)
+COMPANION_RISK_ENTER_BOOST = 0.1         # Acrescimo ao threshold de RISCO com acompanhante (compensa erro de associacao)
+PATIENT_ASSOC_MAX_JUMP_RATIO = 0.25      # Salto maximo do centroide entre frames (fracao da diagonal do frame)
+
+# Publicação de transições (anti-flapping)
+STATE_PUBLISH_DWELL_FRAMES = 3           # Frames que o estado candidato deve persistir antes de ser logado
+ALERT_IMAGE_COOLDOWN_SECONDS = 30        # Minimo entre imagens da mesma transicao (from,to)
 
 # Hardening: suavização de confiança de keypoints
 CONFIDENCE_EMA_ALPHA = 0.4               # Fator EMA para suavizar confianças (evita flickering em torno de 0.7)
@@ -148,12 +172,15 @@ DASHBOARD_WIDTH = 200  # Largura do painel lateral em pixels
 FLIP_HORIZONTAL = True  # Inverter imagem horizontalmente (espelho)
 
 # Modo de desenvolvimento/homologação
-DEV_MODE = True  # Quando True, salva imagens de alertas para evidência
+# Producao: SEMPRE False. Ative apenas via variavel de ambiente MVISION_DEV=1
+# (nunca editando este arquivo), para nao vazar para o deploy.
+DEV_MODE = _os.environ.get("MVISION_DEV", "0") == "1"  # Quando True, salva imagens de alertas para evidência
 
 # Modo de desenvolvimento: ignora detecção de cama
 # Quando True, usa a última referência salva em bed_reference.json
 # Útil para testes em ambientes sem cama/sofá disponível
-DEV_SKIP_BED_DETECTION = True
+# Ative apenas via variavel de ambiente MVISION_SKIP_BED=1
+DEV_SKIP_BED_DETECTION = _os.environ.get("MVISION_SKIP_BED", "0") == "1"
 
 # Diretório para imagens de alertas (modo dev/homologação)
 ALERT_IMAGES_DIR = "data/alert_images"
@@ -185,3 +212,59 @@ GPIO_PIN_ALERT = 16          # Pino para alerta de risco (pisca)
 GPIO_PIN_SYSTEM_READY = 20   # Pino para sistema configurado
 GPIO_BLINK_INTERVAL = 0.5    # Intervalo de pisca em segundos
 GPIO_ALERT_DURATION = 30     # Duracao maxima do alerta em segundos
+
+# =============================================================================
+# Overlay de configuração de runtime (editável pelo painel web)
+# =============================================================================
+# O painel web NUNCA reescreve este arquivo. Ele grava (atomicamente) o JSON
+# abaixo, cujas chaves sobrescrevem os defaults deste módulo no import.
+# Qualquer falha (arquivo ausente, truncado, tipo inválido) é ignorada por
+# chave — o sistema SEMPRE sobe com os defaults.
+RUNTIME_CONFIG_PATH = "config/runtime_config.json"
+
+# Chaves que o painel web pode alterar. DEV_MODE/DEV_SKIP_BED_DETECTION ficam
+# de fora de propósito: só entram por variável de ambiente (MVISION_DEV=1).
+RUNTIME_EDITABLE_KEYS = [
+    "FLIP_HORIZONTAL",
+    "BED_RECHECK_INTERVAL_HOURS",
+    "BED_DETECTION_SENSITIVITY",
+    "EMA_ALPHA",
+    "EMA_THRESHOLD_ENTER_RISK",
+    "EMA_THRESHOLD_EXIT_RISK",
+    "POSE_CONFIDENCE_HIGH",
+    "POSE_FRAMES_TO_CONFIRM",
+    "FRAMES_TO_LOSE_PATIENT",
+    "COMPANION_ANALYSIS_ENABLED",
+]
+
+
+def _apply_runtime_overrides() -> None:
+    import json as _json
+
+    try:
+        if not _os.path.exists(RUNTIME_CONFIG_PATH):
+            return
+        with open(RUNTIME_CONFIG_PATH, "r", encoding="utf-8-sig") as _f:
+            _overrides = _json.load(_f)
+        if not isinstance(_overrides, dict):
+            return
+        for _key, _value in _overrides.items():
+            if _key not in RUNTIME_EDITABLE_KEYS or _key not in globals():
+                continue
+            _default = globals()[_key]
+            # bool antes de int (bool é subclasse de int em Python)
+            if isinstance(_default, bool):
+                if isinstance(_value, bool):
+                    globals()[_key] = _value
+            elif isinstance(_default, (int, float)):
+                if isinstance(_value, (int, float)) and not isinstance(_value, bool):
+                    globals()[_key] = type(_default)(_value)
+            elif isinstance(_default, str):
+                if isinstance(_value, str):
+                    globals()[_key] = _value
+    except Exception:
+        # Overlay corrompido ou ilegível: segue com defaults (boot garantido)
+        pass
+
+
+_apply_runtime_overrides()
