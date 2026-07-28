@@ -54,12 +54,13 @@ def preprocess_ir_histeq(frame: np.ndarray) -> np.ndarray:
 class BedDetector:
     """Detector de cama hospitalar usando YOLOv8 com múltiplas estratégias."""
 
-    def __init__(self, yolo_model, aseto_model=None):
+    def __init__(self, yolo_model=None, aseto_model=None):
         """
         Inicializa o detector de cama.
 
         Args:
-            yolo_model: Modelo YOLO COCO carregado para inferência.
+            yolo_model: Modelo YOLO COCO para inferência, ou None para carregar
+                sob demanda via ensure_model_loaded() (economia de RAM no RPi).
             aseto_model: Modelo ASETO fine-tuned para cama hospitalar (opcional).
         """
         self.model = yolo_model
@@ -73,13 +74,40 @@ class BedDetector:
         self.detected_score: float = 0.0
 
         # Resolve nomes de classes para índices (legado, para recheck)
-        self.bed_class_indices = self._resolve_class_names(BED_CLASS_NAMES)
+        self.bed_class_indices = self._resolve_class_names(BED_CLASS_NAMES) if yolo_model else []
 
-        # Constrói estratégias de detecção
-        self.strategies = self._build_strategies()
+        # Constrói estratégias de detecção (adiado se modelo for lazy)
+        self.strategies = self._build_strategies() if yolo_model else []
 
         # Tenta carregar referência salva
         self.load_reference()
+
+    def ensure_model_loaded(self, model_path: str) -> None:
+        """
+        Carrega o modelo de cama sob demanda.
+
+        O modelo COCO (yolov8l) so e necessario durante calibracao/recheck —
+        eventos raros. Mante-lo residente junto do modelo de pose estoura o
+        orcamento de memoria do servico no Raspberry Pi (OOM-kill).
+        """
+        if self.model is not None:
+            return
+        from ultralytics import YOLO
+        print(f"[BedDetector] Carregando modelo de cama {model_path} (sob demanda)...")
+        self.model = YOLO(model_path)
+        self.bed_class_indices = self._resolve_class_names(BED_CLASS_NAMES)
+        self.strategies = self._build_strategies()
+
+    def release_model(self) -> None:
+        """Libera o modelo de cama da memoria apos calibracao/recheck."""
+        if self.model is None:
+            return
+        import gc
+        self.model = None
+        self.strategies = []
+        self.bed_class_indices = []
+        gc.collect()
+        print("[BedDetector] Modelo de cama liberado da memoria")
 
     def _resolve_class_names(self, class_names: list) -> list:
         """Resolve nomes de classes para índices usando model.names (COCO)."""
@@ -471,8 +499,8 @@ class BedDetector:
             "score": float(self.detected_score),
         }
 
-        with open(self.reference_path, "w") as f:
-            json.dump(data, f, indent=2)
+        from modules.atomic_io import atomic_write_json
+        atomic_write_json(self.reference_path, data)
 
         self.bed_bbox = bbox
         self.last_detection_time = data["timestamp"]

@@ -38,10 +38,18 @@ import platform
 if platform.system() == "Linux" and not os.environ.get("DISPLAY"):
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+# Sistema 100% offline: impede qualquer tentativa de download do ultralytics
+# (ex: quando um .pt esta corrompido/ponteiro LFS, ele tentaria baixar da internet)
+os.environ.setdefault("YOLO_OFFLINE", "True")
+os.environ.setdefault("ULTRALYTICS_OFFLINE", "True")
+os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+
 from ultralytics import YOLO
 
 from config import (
     BED_STANDBY_RETRY_SECONDS,
+    COMPANION_ANALYSIS_ENABLED,
+    PATIENT_ASSOC_MAX_JUMP_RATIO,
     CALIBRATION_CONSISTENCY_MAX_DIST,
     CALIBRATION_CONSISTENCY_VARIANCE,
     CALIBRATION_FRAMES,
@@ -61,10 +69,11 @@ from config import (
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
     WINDOW_NAME,
-    YOLO_ASETO_MODEL,
     YOLO_BED_MODEL,
-    YOLO_MODEL,
     YOLO_POSE_CONFIDENCE,
+    YOLO_POSE_IMGSZ,
+    YOLO_POSE_IOU,
+    YOLO_POSE_MAX_DET,
     YOLO_POSE_MODEL,
 )
 from gui.display import DisplayManager
@@ -438,6 +447,109 @@ def _filter_overlapping_boxes(boxes_xyxy: np.ndarray, iou_threshold: float = 0.4
     return keep
 
 
+def validate_model_file(model_path: str) -> None:
+    """
+    Valida o arquivo de modelo .pt ANTES de entrega-lo ao ultralytics.
+
+    Em ambiente offline, um .pt ausente/invalido (ex: ponteiro Git LFS de
+    ~130 bytes apos clone sem git-lfs) faria o ultralytics tentar baixar da
+    internet e falhar de forma obscura. Aqui falhamos rapido e com mensagem
+    inequivoca.
+
+    Raises:
+        RuntimeError: Se o arquivo nao existe, e ponteiro LFS ou nao e um
+            checkpoint valido.
+    """
+    p = Path(model_path)
+    if not p.exists():
+        raise RuntimeError(
+            f"Modelo nao encontrado: {model_path}. "
+            f"Sistema offline NAO baixa modelos - copie o arquivo manualmente."
+        )
+
+    with open(p, "rb") as f:
+        head = f.read(256)
+
+    if head.startswith(b"version https://git-lfs"):
+        raise RuntimeError(
+            f"Modelo {model_path} e um PONTEIRO Git LFS, nao o arquivo real. "
+            f"Execute 'git lfs pull' com internet ou copie o .pt manualmente."
+        )
+
+    # Checkpoints torch sao arquivos zip (magic PK) ou pickle legado (\x80)
+    if not (head.startswith(b"PK") or head.startswith(b"\x80")):
+        raise RuntimeError(
+            f"Modelo {model_path} nao parece um checkpoint valido "
+            f"(cabecalho inesperado). Arquivo corrompido?"
+        )
+
+    size_mb = p.stat().st_size / (1024 * 1024)
+    if size_mb < 1.0:
+        raise RuntimeError(
+            f"Modelo {model_path} tem apenas {size_mb:.2f} MB - arquivo truncado?"
+        )
+
+    print(f"    Modelo {model_path} validado ({size_mb:.1f} MB)")
+
+
+def _select_patient_index(
+    boxes_xyxy: np.ndarray,
+    keep: list,
+    bed_bbox: Tuple[int, int, int, int],
+    last_centroid: Optional[Tuple[float, float]],
+    frame_shape: Tuple[int, ...],
+) -> Optional[int]:
+    """
+    Seleciona qual das deteccoes mantidas e a pessoa-paciente.
+
+    Associacao leve (sem tracker): pontua cada bbox pela fracao contida na
+    cama, proximidade do centro da cama e continuidade com o centroide do
+    frame anterior. Retorna None quando nenhuma deteccao tem associacao
+    minima com a cama (ex: apenas passantes/acompanhantes em pe) — a FSM
+    trata como ausencia de evidencia, o que preserva alertas ativos.
+    """
+    bx1, by1, bx2, by2 = bed_bbox
+    bed_cx = (bx1 + bx2) / 2.0
+    bed_cy = (by1 + by2) / 2.0
+    frame_diag = float(np.hypot(frame_shape[1], frame_shape[0]))
+
+    best_idx = None
+    best_score = -1.0
+    best_containment = 0.0
+
+    for i in keep:
+        x1, y1, x2, y2 = boxes_xyxy[i]
+        area = max(1.0, (x2 - x1) * (y2 - y1))
+
+        ix1, iy1 = max(x1, bx1), max(y1, by1)
+        ix2, iy2 = min(x2, bx2), min(y2, by2)
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        containment = inter / area
+
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+        dist_bed = float(np.hypot(cx - bed_cx, cy - bed_cy)) / frame_diag
+
+        score = containment - 0.5 * dist_bed
+
+        # Bonus de continuidade: mesma pessoa do frame anterior
+        if last_centroid is not None:
+            jump = float(np.hypot(cx - last_centroid[0], cy - last_centroid[1])) / frame_diag
+            if jump <= PATIENT_ASSOC_MAX_JUMP_RATIO:
+                score += 0.3 * (1.0 - jump / PATIENT_ASSOC_MAX_JUMP_RATIO)
+
+        if score > best_score:
+            best_score = score
+            best_idx = i
+            best_containment = containment
+
+    # Sem associacao minima com a cama, nao ha paciente identificavel
+    if best_idx is not None and best_containment < 0.15:
+        return None
+
+    return best_idx
+
+
 def _kill_previous_camera_processes() -> None:
     """
     Mata instancias anteriores de main.py que possam estar segurando a camera.
@@ -478,19 +590,30 @@ def _kill_previous_camera_processes() -> None:
         print("[Startup] Nenhuma instancia anterior encontrada")
 
 
-def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayManager, AlertLogger, GPIOAlertManager]:
+def initialize_system() -> Tuple[CameraBase, YOLO, BedDetector, DisplayManager, AlertLogger, GPIOAlertManager]:
     """
     Inicializa todos os componentes do sistema.
 
     Returns:
-        Tuple com (camera, yolo, yolo_pose, bed_detector, display, alert_logger, gpio_manager)
+        Tuple com (camera, yolo_pose, bed_detector, display, alert_logger, gpio_manager)
 
     Raises:
         Exception: Se falhar ao inicializar algum componente
     """
     # No Linux, aguarda X11 estar pronto (serviço pode iniciar antes do desktop)
+    # IMPORTANTE: espera em fatias curtas COM heartbeat — uma espera bloqueante
+    # maior que WatchdogSec derrubaria o servico em loop no boot sem monitor
     if IS_LINUX:
-        display_available = wait_for_display(timeout_seconds=DISPLAY_WAIT_TIMEOUT, check_interval=5)
+        display_available = False
+        display_wait_slice = 5
+        waited = 0
+        while waited < DISPLAY_WAIT_TIMEOUT:
+            send_heartbeat()
+            if wait_for_display(timeout_seconds=display_wait_slice, check_interval=display_wait_slice):
+                display_available = True
+                break
+            waited += display_wait_slice
+        send_heartbeat()
         if display_available:
             logger.info("Display X11 disponível - modo GUI ativo")
         else:
@@ -523,24 +646,20 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
     print(f"    Camera inicializada com sucesso")
     print(f"    Resolucao: {width}x{height}")
 
-    # 2. Carrega modelos YOLO
-    print("\n[2/4] Carregando modelos YOLO...")
-    yolo = YOLO(YOLO_BED_MODEL)
-    print(f"    Modelo {YOLO_BED_MODEL} carregado (deteccao de cama - COCO)")
-
-    yolo_aseto = None
-    if Path(YOLO_ASETO_MODEL).exists():
-        yolo_aseto = YOLO(YOLO_ASETO_MODEL)
-        print(f"    Modelo {YOLO_ASETO_MODEL} carregado (deteccao de cama - ASETO)")
-    else:
-        logger.warning(f"Modelo ASETO nao encontrado em {YOLO_ASETO_MODEL} - usando apenas COCO")
-
+    # 2. Valida e carrega modelo de pose (unico residente em memoria)
+    # O modelo de cama (yolov8l, 87 MB) e carregado SOB DEMANDA apenas na
+    # calibracao/recheck e liberado em seguida — evita OOM-kill no RPi.
+    # O ASETO foi removido do pipeline (COCO histEq/raw assumiu a calibracao).
+    print("\n[2/4] Validando e carregando modelo de pose...")
+    validate_model_file(YOLO_POSE_MODEL)
+    send_heartbeat()
     yolo_pose = YOLO(YOLO_POSE_MODEL)
+    send_heartbeat()
     print(f"    Modelo {YOLO_POSE_MODEL} carregado (pose)")
 
     # 3. Inicializa modulos
     print("\n[3/4] Inicializando modulos...")
-    bed_detector = BedDetector(yolo, aseto_model=yolo_aseto)
+    bed_detector = BedDetector()
     display = DisplayManager(WINDOW_NAME)
     alert_logger = AlertLogger()
 
@@ -555,7 +674,7 @@ def initialize_system() -> Tuple[CameraBase, YOLO, YOLO, BedDetector, DisplayMan
     # Inicializa gerenciador GPIO
     gpio_manager = GPIOAlertManager()
 
-    return camera, yolo, yolo_pose, bed_detector, display, alert_logger, gpio_manager
+    return camera, yolo_pose, bed_detector, display, alert_logger, gpio_manager
 
 
 def run_monitoring_loop(
@@ -606,6 +725,7 @@ def run_monitoring_loop(
     previous_pose_state: str = PoseStateMachineEMA.AGUARDANDO
     alert_feedback_until = 0
     last_alert_image = ""
+    last_patient_centroid: Optional[Tuple[float, float]] = None
 
     # Controle de heartbeat
     last_heartbeat = time.time()
@@ -655,7 +775,14 @@ def run_monitoring_loop(
 
             # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION)
             if not DEV_SKIP_BED_DETECTION and bed_detector.needs_recheck():
+                # Evento raro (a cada horas): carrega o modelo de cama, roda e
+                # libera. Heartbeat antes/depois pois o stall e de varios segundos
+                send_heartbeat()
+                validate_model_file(YOLO_BED_MODEL)
+                bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
                 result = bed_detector.detect_bed_detailed(frame, raw_frame=raw_frame)
+                bed_detector.release_model()
+                send_heartbeat()
                 if result is not None:
                     new_bbox, class_name, confidence, score = result
                     current_score = bed_detector.detected_score
@@ -676,8 +803,17 @@ def run_monitoring_loop(
                 else:
                     bed_detector.postpone_recheck()
 
-            # Detecta pose com YOLOv8-Pose
-            results = yolo_pose.predict(frame, conf=YOLO_POSE_CONFIDENCE, verbose=False)
+            # Detecta pose com YOLOv8-Pose (parametros de NMS explicitos —
+            # defaults do Ultralytics ja mudaram entre versoes)
+            results = yolo_pose.predict(
+                frame,
+                conf=YOLO_POSE_CONFIDENCE,
+                iou=YOLO_POSE_IOU,
+                imgsz=YOLO_POSE_IMGSZ,
+                max_det=YOLO_POSE_MAX_DET,
+                classes=[0],
+                verbose=False,
+            )
 
             body_points = None
             analysis = None
@@ -687,31 +823,62 @@ def run_monitoring_loop(
             # Verifica se detectou pessoa com keypoints
             if len(results) > 0 and results[0].keypoints is not None:
                 keypoints_data = results[0].keypoints
+                boxes = results[0].boxes
 
                 if keypoints_data.xy is not None and len(keypoints_data.xy) > 0:
                     # Filtra deteccoes duplicadas (bboxes sobrepostas da mesma pessoa)
                     raw_count = len(keypoints_data.xy)
-                    if raw_count > 1 and results[0].boxes is not None and len(results[0].boxes) >= raw_count:
-                        boxes_xyxy = results[0].boxes.xyxy.cpu().numpy()
+                    if raw_count > 1 and boxes is not None and len(boxes) >= raw_count:
+                        boxes_xyxy = boxes.xyxy.cpu().numpy()[:raw_count]
                         keep = _filter_overlapping_boxes(boxes_xyxy, iou_threshold=0.4)
-                        person_count = len(keep)
                     else:
-                        person_count = raw_count
+                        boxes_xyxy = None
+                        keep = list(range(raw_count))
+                    person_count = len(keep)
 
+                    # Seleciona a pessoa-paciente (indice REAL do resultado YOLO,
+                    # nunca [0] fixo — keypoints e bbox devem vir da mesma deteccao)
+                    patient_idx = None
                     if person_count == 1:
-                        keypoints = keypoints_data.xy[0].cpu().numpy()
+                        patient_idx = keep[0]
+                    elif person_count > 1 and COMPANION_ANALYSIS_ENABLED and boxes_xyxy is not None:
+                        # Com acompanhante presente, associa o paciente a cama
+                        # por geometria e continua a analise de risco
+                        patient_idx = _select_patient_index(
+                            boxes_xyxy, keep, bed_bbox, last_patient_centroid, frame.shape
+                        )
 
-                        if keypoints_data.conf is not None and len(keypoints_data.conf) > 0:
-                            confidences = keypoints_data.conf[0].cpu().numpy()
+                    if patient_idx is not None:
+                        keypoints = keypoints_data.xy[patient_idx].cpu().numpy()
+
+                        if keypoints_data.conf is not None and len(keypoints_data.conf) > patient_idx:
+                            confidences = keypoints_data.conf[patient_idx].cpu().numpy()
                         else:
                             confidences = np.ones(len(keypoints))
 
+                        # Extrai bbox da MESMA deteccao dos keypoints
+                        if boxes is not None and len(boxes) > patient_idx:
+                            person_bbox = tuple(
+                                boxes.xyxy[patient_idx].cpu().numpy().astype(int)
+                            )
+
+                        # Continuidade de identidade: salto de centroide grande
+                        # indica troca de pessoa — zera EMA de confiancas para
+                        # nao contaminar a nova pessoa com a anterior
+                        if person_bbox is not None:
+                            cx = (person_bbox[0] + person_bbox[2]) / 2.0
+                            cy = (person_bbox[1] + person_bbox[3]) / 2.0
+                            if last_patient_centroid is not None:
+                                frame_diag = float(np.hypot(frame.shape[1], frame.shape[0]))
+                                jump = float(np.hypot(
+                                    cx - last_patient_centroid[0],
+                                    cy - last_patient_centroid[1],
+                                )) / frame_diag
+                                if jump > PATIENT_ASSOC_MAX_JUMP_RATIO:
+                                    pose_analyzer.reset_confidence_ema()
+                            last_patient_centroid = (cx, cy)
+
                         confidences = pose_analyzer.smooth_confidences(confidences)
-
-                        # Extrai bbox da pessoa do resultado YOLO-Pose
-                        if results[0].boxes is not None and len(results[0].boxes) > 0:
-                            person_bbox = tuple(results[0].boxes.xyxy[0].cpu().numpy().astype(int))
-
                         body_points = pose_analyzer.extract_body_points(keypoints, confidences)
                         analysis = pose_analyzer.analyze_position(body_points, person_bbox)
 
@@ -719,8 +886,12 @@ def run_monitoring_loop(
             pose_state = pose_fsm.update(analysis, body_points, person_count)
             pose_state_enum = PatientPoseState(pose_state)
 
-            # Atualiza monitor
-            monitor.update(person_count)
+            # Atualiza monitor (fail-safe: nunca "Cama Vazia" com alerta ativo)
+            monitor.update(
+                person_count,
+                pose_state=pose_fsm.current_state,
+                occlusion_presumed=pose_fsm.occlusion_presumed,
+            )
 
             # --- Renderizacao ---
             frame = display.draw_bed_polygon(frame, bed_bbox)
@@ -737,6 +908,8 @@ def run_monitoring_loop(
                 status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - ALERTA CRITICO!"
             elif pose_state_enum == PatientPoseState.RISCO_POTENCIAL:
                 status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - ATENCAO!"
+            elif pose_state_enum == PatientPoseState.ALERTA_PERSISTENTE:
+                status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - VERIFICAR PACIENTE!"
             else:
                 status_text = f"STATUS: {status} | POSE: {pose_state_enum.value}"
 
@@ -757,14 +930,14 @@ def run_monitoring_loop(
                     last_alert_image = image_path
                     alert_feedback_until = time.time() + 3.0
                     print(f"[ALERTA] {pose_state} - Imagem salva: {image_path}")
-                elif pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
+                elif pose_state in PoseStateMachineEMA.ALERT_STATES:
                     print(f"[ALERTA] {pose_state}")
 
                 previous_pose_state = pose_state
 
-            # Controle de alerta GPIO (fora do bloco de mudança de estado)
-            # Chamado a cada frame para manter o re-trigger ativo enquanto o alerta persistir
-            if pose_state in [PoseStateMachineEMA.RISCO_POTENCIAL, PoseStateMachineEMA.PACIENTE_FORA]:
+            # Controle de alerta GPIO: usa o estado BRUTO da FSM (sem dwell de
+            # publicacao) para acionar o alerta fisico o mais cedo possivel
+            if pose_fsm.current_state in PoseStateMachineEMA.ALERT_STATES:
                 gpio_manager.start_risk_alert()
             else:
                 gpio_manager.stop_risk_alert()
@@ -787,6 +960,7 @@ def run_monitoring_loop(
             if key == ord("r") or key == ord("R"):
                 pose_fsm.reset()
                 pose_analyzer.reset_confidence_ema()
+                last_patient_centroid = None
                 logger.info("Maquina de estados resetada")
 
             # Frame processado com sucesso — reset contador de erros de processamento
@@ -833,7 +1007,7 @@ def main():
             init_attempts += 1
             logger.info(f"Tentativa de inicializacao {init_attempts}/{MAX_INIT_RETRIES}")
 
-            camera, yolo, yolo_pose, bed_detector, display, alert_logger, gpio_manager = initialize_system()
+            camera, yolo_pose, bed_detector, display, alert_logger, gpio_manager = initialize_system()
 
             # Notifica systemd que o processo está vivo (calibração é fase operacional)
             _notify_systemd(b"READY=1")
@@ -863,6 +1037,13 @@ def main():
             calibration_timeout = 300  # 5 minutos maximo para calibracao
             while bed_bbox is None:
                 send_heartbeat()
+
+                # Modelo de cama e carregado apenas aqui (lazy) e liberado apos
+                # a calibracao — nao pode ficar residente junto do pose no RPi
+                if bed_detector.model is None:
+                    validate_model_file(YOLO_BED_MODEL)
+                    bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
+                    send_heartbeat()
 
                 calibration_attempts += 1
                 elapsed = time.time() - calibration_start_time
@@ -898,6 +1079,9 @@ def main():
                         display.render(frame)
 
                     time.sleep(BED_STANDBY_RETRY_SECONDS)
+
+            # Libera modelo de cama da memoria (recarregado no proximo recheck)
+            bed_detector.release_model()
 
             # Exibe mensagem de sucesso
             config_complete_time = time.time()
