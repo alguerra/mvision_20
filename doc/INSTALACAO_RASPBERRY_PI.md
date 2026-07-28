@@ -1,5 +1,13 @@
 # MVisionCare - Guia de Instalação no Raspberry Pi 5
 
+> **⚠ Este guia é para LABORATÓRIO/DESENVOLVIMENTO (exige internet e terminal).**
+> O fluxo oficial de instalação em hospital é **imagem dourada + checklist do técnico**:
+> ver [`IMAGEM_DOURADA.md`](IMAGEM_DOURADA.md) e [`CHECKLIST_TECNICO.md`](CHECKLIST_TECNICO.md).
+> A instalação de software foi consolidada num único comando idempotente:
+> `sudo bash deploy/install.sh` (substitui install-web.sh e setup-display.sh).
+> Diagnóstico a qualquer momento: `mvision-doctor`.
+> A seção de Tailscale aplica-se SOMENTE a unidades de laboratório — nunca ao hospital.
+
 ## Sumário
 
 1. [Visão Geral](#visão-geral)

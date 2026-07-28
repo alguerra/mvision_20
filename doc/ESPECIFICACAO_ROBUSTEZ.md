@@ -156,6 +156,14 @@ Itens identificados na revisão final de fragilidades. Os três primeiros estão
 2. **Watchdog de hardware** — `install.sh` cria `/etc/systemd/system.conf.d/mvision-watchdog.conf` com `RuntimeWatchdogSec=15` (chip `bcm2835_wdt`): kernel panic ou travamento do systemd reinicia o Pi sozinho. Efetivo após reboot.
 3. **Heartbeat visível no painel (anti-falha-silenciosa)** — o monitor publica `/tmp/mvision_status.json` (tmpfs, zero desgaste de SD) a cada 30 s com estado e contagem de pessoas. O backend web cruza isso com o systemd: serviço "active" mas sem sinal >90 s aparece como **"ATENCAO: SEM SINAL do monitor ha Xs"** no status existente do painel, e o endpoint `GET /api/monitor/status` expõe o estado ao vivo (para o frontend P1.4 e para checagens via `curl`).
 
+### Instalação de campo (implementado)
+- **Instalador consolidado idempotente** (`deploy/install.sh`): substitui install-web.sh/setup-display.sh (mantidos como atalhos); cada etapa verifica o estado antes de agir (seguro repetir); units systemd instalados a partir dos templates do repo (fonte única); tolera ausência de internet; termina com verificação real via `mvision-doctor` — só imprime "INSTALACAO OK" se serviços + heartbeat + câmera + modelos + painel estiverem operantes. Modo `--prepare-image` sela o SD para virar imagem dourada.
+- **`mvision-doctor`**: autodiagnóstico PASS/FALHA/AVISO em português (serviços, sinal de vida do monitor, câmera, modelos, calibração, disco, memória, throttling, relógio, watchdog, painel, versão). É o instrumento de suporte por telefone e o critério objetivo de fim de instalação.
+- **`mvision-firstboot`**: provisionamento automático de unidade clonada da imagem dourada (expande filesystem, regenera machine-id/chaves SSH, limpa segredos, auto-desabilita).
+- **Atualização offline por pendrive** (`mvision-usb-update`, roda no boot antes do monitor): pacote `mvision-update-*.tar.gz` + `.sha256` na raiz do pendrive; valida checksum, faz backup, aplica, roda o instalador; idempotente (não re-aplica a mesma versão).
+- **Healthcheck do painel** (timer de 2 min): uvicorn "active" mas sem responder → restart automático (fecha o P1.5).
+- Docs: `doc/IMAGEM_DOURADA.md` (build da imagem por release) e `doc/CHECKLIST_TECNICO.md` (1 página, sem terminal).
+
 ### Documentado (aplicar na imagem do sistema, com teste dedicado no RPi)
 4. **Raiz somente-leitura com overlayroot** — a proteção física definitiva contra corrupção de filesystem por corte de energia (as escritas do MVISION já são atômicas, mas o ext4 do SO não é imune). Procedimento sugerido (Raspberry Pi OS Bookworm):
    1. `sudo apt install overlayroot` (com internet, antes do envio ao hospital);
