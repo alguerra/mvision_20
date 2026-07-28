@@ -32,12 +32,19 @@ StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/tmed/.Xauthority
+# Sistema 100% offline: nunca tentar baixar modelos
+Environment=YOLO_OFFLINE=True
+Environment=ULTRALYTICS_OFFLINE=True
+Environment=YOLO_AUTOINSTALL=False
 
 # Timeout generoso para inicialização (YOLO demora para carregar)
 TimeoutStartSec=300
 TimeoutStopSec=30
 
-# Limites de recursos (YOLO precisa de memória)
+# Limites de recursos (apenas o modelo de pose fica residente;
+# o modelo de cama é carregado sob demanda na calibração)
+# MemoryHigh aplica throttle ANTES do kill — evita ciclo OOM-restart
+MemoryHigh=640M
 MemoryMax=768M
 CPUQuota=90%
 

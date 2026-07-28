@@ -57,6 +57,14 @@ echo -e "${YELLOW}[3/5] Configurando permissoes...${NC}"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$MVISION_DIR/config" 2>/dev/null || true
 chmod 755 "$MVISION_DIR/web/backend"
 
+# Sudoers: o botao "Reiniciar servico" do painel executa
+# `sudo systemctl restart hospital-monitor` — sem esta regra ele falha
+cat > /etc/sudoers.d/mvision-web << EOF
+$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart hospital-monitor
+EOF
+chmod 440 /etc/sudoers.d/mvision-web
+echo -e "${GREEN}Regra sudoers para restart do monitor criada${NC}"
+
 echo -e "${YELLOW}[4/5] Instalando servico systemd...${NC}"
 # Copy service file
 cp "$MVISION_DIR/deploy/$SERVICE_FILE" "/etc/systemd/system/"
@@ -88,7 +96,7 @@ echo ""
 echo "Acesse a interface web em:"
 echo -e "  ${YELLOW}http://$IP_ADDR:8080${NC}"
 echo ""
-echo "Senha padrao: mvision123"
+echo "Senha padrao: mvision123 (TROQUE no primeiro acesso - o sistema exigira)"
 echo ""
 echo "Comandos uteis:"
 echo "  Ver status:  sudo systemctl status $SERVICE_FILE"

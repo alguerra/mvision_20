@@ -72,8 +72,12 @@ StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/$SERVICE_USER/.Xauthority
+Environment=YOLO_OFFLINE=True
+Environment=ULTRALYTICS_OFFLINE=True
+Environment=YOLO_AUTOINSTALL=False
 TimeoutStartSec=300
 TimeoutStopSec=30
+MemoryHigh=640M
 MemoryMax=768M
 CPUQuota=90%
 SupplementaryGroups=gpio video
@@ -83,6 +87,30 @@ WantedBy=multi-user.target
 EOF
 
 echo "  Serviço configurado para: $PROJECT_DIR"
+
+# 1b. Limita o journald (padrão = 10% do SD card; inaceitável em produção)
+echo "[1b/4] Configurando limite do journald..."
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/mvision.conf << EOF
+[Journal]
+SystemMaxUse=200M
+SystemKeepFree=1G
+EOF
+systemctl restart systemd-journald || true
+echo "  journald limitado a 200M"
+
+# 1c. Valida modelos (clone sem git-lfs deixa ponteiros de texto no lugar dos .pt)
+echo "[1c/4] Validando modelos..."
+for model in "$PROJECT_DIR/yolov8n-pose.pt" "$PROJECT_DIR/yolov8l.pt"; do
+    if [ ! -f "$model" ]; then
+        echo "  AVISO: $model não encontrado"
+    elif head -c 24 "$model" | grep -q "version https"; then
+        echo "  ERRO: $model é um ponteiro Git LFS! Execute: git lfs pull"
+        exit 1
+    else
+        echo "  ✓ $(basename $model) OK ($(du -h "$model" | cut -f1))"
+    fi
+done
 
 # 2. Recarrega e habilita o serviço
 echo "[2/4] Habilitando serviço..."
