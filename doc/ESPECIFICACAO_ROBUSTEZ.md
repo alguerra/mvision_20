@@ -110,9 +110,9 @@ Complementa `AUDITORIA_2026-07.md`. Cada item segue o formato **problema → sol
 
 | Item | Ganho esperado | Observações |
 |------|----------------|-------------|
-| **P2.1 Renderização condicional headless** | 15-25% de CPU | `draw_*`/`render` só com display real; anotações compostas on-demand ao salvar imagem de alerta |
-| **P2.2 Export NCNN do yolov8n-pose** | 2-4× FPS (3-5 → 8-15) | Export offline no dev, artefato commitado, validar paridade de keypoints (diff médio <2 px em 100 frames) antes de trocar; fallback `.pt` por config |
-| **P2.3 CLAHE sob demanda** | CPU do pré-processamento | CLAHE só em cena escura (checagem 1×/s) e/ou ROI da cama; eliminar `frame.copy()` por frame (usado só no recheck) |
+| **P2.1 Renderização condicional headless** ✅ IMPLEMENTADO | 15-25% de CPU | Desenho só com display real ou ao salvar evidência (DEV_MODE); `render` não roda em headless. `gui/display.py` + `main.py` |
+| **P2.2 Export NCNN do yolov8n-pose** ✅ IMPLEMENTADO (export pendente no notebook) | 2-4× FPS (3-5 → 8-15) | `tools/export_ncnn_pose.py` exporta e valida paridade (média <2 px, reprovação bloqueia); `YOLO_POSE_BACKEND="auto"` usa NCNN se a pasta `yolov8n-pose_ncnn_model/` existir no dispositivo; rollback = apagar a pasta ou `backend="pt"`. Doctor acusa ausência |
+| **P2.3 Normalização IR sob demanda** ✅ IMPLEMENTADO | CPU do pré-processamento | Gray-world+CLAHE só quando a cena está escura ou com cast IR (decisão em frame subamostrado, cache de 30 frames, `IR_NORMALIZE_AUTO`); `frame.copy()` só quando o recheck vai rodar |
 | **P2.4 Telemetria `/health`** | Visibilidade de degradação | FPS efetivo, RSS, `vcgencmd get_throttled`, latência de inferência a cada 60 s; alerta no painel se FPS<2 |
 | **P2.5 TLS + hardening web** | Segurança de rede | Certificado autoassinado no install, rate-limit de login, cookie `secure` |
 

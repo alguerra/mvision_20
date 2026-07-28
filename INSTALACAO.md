@@ -79,6 +79,8 @@ rm ~/mvision.tar.gz
 ```
 (Os `.pt` vão separados porque o `git archive` exporta apenas os ponteiros LFS.)
 
+> **Performance (recomendado):** gere no notebook o backend acelerado NCNN — `python tools/export_ncnn_pose.py <pasta_com_frames_do_leito>` — e copie a pasta `yolov8n-pose_ncnn_model/` junto com o código. O sistema a usa automaticamente (2–4× mais FPS); sem ela, roda em PyTorch normalmente.
+
 **✔ Ponto de verificação (qualquer opção):**
 ```bash
 ls -lh /mvision/main.py /mvision/yolov8n-pose.pt /mvision/yolov8l.pt
