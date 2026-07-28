@@ -99,6 +99,17 @@ EOF
 systemctl restart systemd-journald || true
 echo "  journald limitado a 200M"
 
+# 1d. Watchdog de HARDWARE (bcm2835_wdt): reinicia o Pi se o kernel/systemd
+# travar — sem acesso remoto, e a unica recuperacao para travamento total
+echo "[1d/4] Habilitando watchdog de hardware..."
+mkdir -p /etc/systemd/system.conf.d
+cat > /etc/systemd/system.conf.d/mvision-watchdog.conf << EOF
+[Manager]
+RuntimeWatchdogSec=15
+RebootWatchdogSec=2min
+EOF
+echo "  Watchdog de hardware configurado (efetivo apos reboot)"
+
 # 1c. Valida modelos (clone sem git-lfs deixa ponteiros de texto no lugar dos .pt)
 echo "[1c/4] Validando modelos..."
 for model in "$PROJECT_DIR/yolov8n-pose.pt" "$PROJECT_DIR/yolov8l.pt"; do

@@ -223,6 +223,65 @@ def get_system_info() -> dict:
     return info
 
 
+# Arquivos publicados pelo monitor em tmpfs (main.py)
+MONITOR_STATUS_FILE = "/tmp/mvision_status.json"
+MONITOR_HEARTBEAT_FILE = "/tmp/hospital-monitor-heartbeat"
+
+# Idade maxima do heartbeat para considerar o monitor operante (o main.py
+# publica a cada 30s; 90s tolera 2 falhas antes de acusar ausencia de sinal)
+MONITOR_STALE_SECONDS = 90
+
+
+def get_monitor_status() -> dict:
+    """
+    Estado AO VIVO do monitor de leito, independente do systemd.
+
+    Detecta o cenario perigoso de servico "active" mas monitor inoperante
+    (ex: camera morta em loop de reinicializacao) — sem isso o painel
+    sugere cobertura que nao existe.
+    """
+    import time
+
+    status = {
+        "alive": False,
+        "state": None,
+        "person_count": None,
+        "seconds_since_update": None,
+        "message": "Sem sinal do monitor",
+    }
+
+    try:
+        if os.path.exists(MONITOR_STATUS_FILE):
+            with open(MONITOR_STATUS_FILE, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+            age = time.time() - float(data.get("timestamp", 0))
+            status["state"] = data.get("state")
+            status["person_count"] = data.get("person_count")
+            status["seconds_since_update"] = int(age)
+            if age <= MONITOR_STALE_SECONDS:
+                status["alive"] = True
+                status["message"] = f"Monitor ativo ({data.get('state')})"
+            else:
+                status["message"] = f"SEM SINAL do monitor ha {int(age)}s"
+    except Exception:
+        pass
+
+    # Fallback: arquivo de heartbeat simples (existe desde o boot do monitor)
+    if not status["alive"] and status["seconds_since_update"] is None:
+        try:
+            if os.path.exists(MONITOR_HEARTBEAT_FILE):
+                import time as _t
+                age = _t.time() - os.path.getmtime(MONITOR_HEARTBEAT_FILE)
+                status["seconds_since_update"] = int(age)
+                if age <= MONITOR_STALE_SECONDS:
+                    status["alive"] = True
+                    status["message"] = "Monitor em inicializacao"
+        except Exception:
+            pass
+
+    return status
+
+
 def get_service_status() -> dict:
     """Get the status of the main monitoring service."""
     status = {
@@ -257,6 +316,13 @@ def get_service_status() -> dict:
         status["status"] = "timeout"
     except Exception as e:
         status["status"] = str(e)
+
+    # Cruza com o heartbeat real do monitor: "active" no systemd nao garante
+    # que o loop de monitoramento esta rodando (pode estar em reinit eterno)
+    monitor = get_monitor_status()
+    status["monitor"] = monitor
+    if status["running"] and not monitor["alive"]:
+        status["status"] = f"{status['status']} - ATENCAO: {monitor['message']}"
 
     return status
 

@@ -29,6 +29,7 @@ from config_manager import (
     save_system_settings,
     get_system_info,
     get_service_status,
+    get_monitor_status,
     restart_service,
 )
 
@@ -183,6 +184,12 @@ async def update_config(
 
 
 # ============== Settings Endpoints ==============
+
+@app.get("/api/monitor/status")
+async def monitor_status(_: str = Depends(require_auth)):
+    """Estado ao vivo do monitor de leito (heartbeat via tmpfs)."""
+    return get_monitor_status()
+
 
 @app.get("/api/settings")
 async def get_settings(_: str = Depends(require_auth)):

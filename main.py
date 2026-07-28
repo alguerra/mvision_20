@@ -95,6 +95,11 @@ from modules.state_machine import PatientPoseState, SystemState
 HEARTBEAT_FILE = "/tmp/hospital-monitor-heartbeat"
 HEARTBEAT_INTERVAL = 30  # Segundos entre heartbeats
 
+# Status do monitor para o painel web (/tmp = tmpfs, zero desgaste de SD).
+# Sem isso, um monitor em loop de reinicializacao (ex: camera morta) parece
+# "ativo" no painel e ninguem percebe que o leito esta sem cobertura.
+STATUS_FILE = "/tmp/mvision_status.json"
+
 # Tentativas de reinicializacao
 MAX_INIT_RETRIES = 10  # Aumentado para maior resiliencia no Raspberry Pi
 INIT_RETRY_DELAY = 5   # Segundos entre tentativas (reduzido para recuperar mais rapido)
@@ -164,6 +169,21 @@ def send_heartbeat() -> None:
 
     try:
         Path(HEARTBEAT_FILE).touch()
+    except Exception:
+        pass
+
+
+def write_status_file(state: str, person_count: int = 0) -> None:
+    """Publica estado atual do monitor para o painel web (via tmpfs)."""
+    if not IS_LINUX:
+        return
+    try:
+        from modules.atomic_io import atomic_write_json
+        atomic_write_json(STATUS_FILE, {
+            "timestamp": time.time(),
+            "state": state,
+            "person_count": person_count,
+        })
     except Exception:
         pass
 
@@ -726,6 +746,7 @@ def run_monitoring_loop(
     alert_feedback_until = 0
     last_alert_image = ""
     last_patient_centroid: Optional[Tuple[float, float]] = None
+    last_person_count = 0
 
     # Controle de heartbeat
     last_heartbeat = time.time()
@@ -742,9 +763,10 @@ def run_monitoring_loop(
         try:
             frame_start = time.time()
 
-            # Envia heartbeat periodicamente
+            # Envia heartbeat periodicamente (watchdog + status para o painel)
             if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
                 send_heartbeat()
+                write_status_file(pose_fsm.current_state, last_person_count)
                 last_heartbeat = time.time()
 
             ret, frame = camera.read()
@@ -892,6 +914,7 @@ def run_monitoring_loop(
                 pose_state=pose_fsm.current_state,
                 occlusion_presumed=pose_fsm.occlusion_presumed,
             )
+            last_person_count = person_count
 
             # --- Renderizacao ---
             frame = display.draw_bed_polygon(frame, bed_bbox)
@@ -1002,6 +1025,7 @@ def main():
         try:
             # Envia heartbeat no inicio
             send_heartbeat()
+            write_status_file("INICIALIZANDO")
 
             # Inicializacao com retry
             init_attempts += 1
