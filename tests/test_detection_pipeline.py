@@ -13,7 +13,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import _filter_overlapping_boxes, _select_patient_index
+from main import _filter_overlapping_boxes, _needs_ir_normalization, _select_patient_index
 from modules.bed_detector import BedDetector
 
 FRAME_SHAPE = (480, 640, 3)
@@ -68,6 +68,26 @@ class TestPatientSelection(unittest.TestCase):
         last_centroid = (500.0, 350.0)  # perto da deteccao 1
         idx = _select_patient_index(boxes, [0, 1], BED_BBOX, last_centroid, FRAME_SHAPE)
         self.assertEqual(idx, 1)
+
+
+class TestIRNormalizationDecision(unittest.TestCase):
+    """Normalizacao IR sob demanda: so em cena escura ou com cast de cor."""
+
+    def test_dark_scene_needs_normalization(self):
+        frame = np.full((480, 640, 3), 40, dtype=np.uint8)
+        self.assertTrue(_needs_ir_normalization(frame))
+
+    def test_bright_balanced_scene_skips_normalization(self):
+        frame = np.full((480, 640, 3), 150, dtype=np.uint8)
+        self.assertFalse(_needs_ir_normalization(frame))
+
+    def test_ir_purple_cast_needs_normalization(self):
+        # Cast tipico de camera IR: canal azul/vermelho muito acima do verde
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        frame[:, :, 0] = 180  # B
+        frame[:, :, 1] = 110  # G
+        frame[:, :, 2] = 170  # R
+        self.assertTrue(_needs_ir_normalization(frame))
 
 
 class TestAsetoValidation(unittest.TestCase):

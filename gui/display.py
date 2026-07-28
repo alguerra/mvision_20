@@ -48,8 +48,10 @@ class DisplayManager:
         self._display: DisplayBase = create_display(headless=headless)
         self.headless = not isinstance(self._display, DisplayOpenCV)
 
-        # Sempre renderiza no modo normal (GUI)
-        self.skip_rendering = False
+        # Em headless (sem X11/monitor), todo o pipeline de desenho e
+        # desperdicio de CPU (~15-25% no RPi) — should_draw() passa a
+        # refletir isso e o loop principal pula as operacoes de desenho
+        self.skip_rendering = self.headless
 
     def draw_bed_polygon(
         self,

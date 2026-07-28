@@ -23,6 +23,14 @@ YOLO_MODEL = "yolov8n.pt"
 
 # Modelo YOLOv8-Pose para detecção de keypoints
 YOLO_POSE_MODEL = "yolov8n-pose.pt"
+
+# Backend de inferência de pose:
+#   "auto" = usa NCNN se o diretório exportado existir, senão PyTorch (.pt)
+#   "ncnn" = força NCNN (falha se ausente) | "pt" = força PyTorch
+# NCNN é 2-4x mais rápido em CPU ARM. Exportar no notebook com:
+#   python tools/export_ncnn_pose.py   (valida paridade de keypoints)
+YOLO_POSE_BACKEND = "auto"
+YOLO_POSE_NCNN_DIR = "yolov8n-pose_ncnn_model"
 YOLO_POSE_CONFIDENCE = 0.20        # Confiança mínima para detecção de pessoas (default YOLO: 0.25)
 YOLO_POSE_IOU = 0.5                # NMS IoU explicito (default Ultralytics 0.7 e frouxo demais)
 YOLO_POSE_MAX_DET = 5              # Maximo de pessoas por frame (quarto hospitalar)
@@ -167,6 +175,15 @@ CALIBRATION_CONSISTENCY_MAX_DIST = 80    # Max distancia entre bboxes no mesmo c
 
 # Controle de FPS
 FRAME_DELAY_SECONDS = 0.2            # Sleep entre frames (5 FPS)
+
+# Normalização IR sob demanda: o gray-world + CLAHE full-frame custa caro no
+# RPi e só é necessário quando a cena tem cast de cor IR ou pouca luz.
+# A decisão é reavaliada a cada IR_CHECK_INTERVAL_FRAMES em versão reduzida
+# do frame e fica em cache entre reavaliações.
+IR_NORMALIZE_AUTO = True             # False = normaliza sempre (comportamento antigo)
+IR_CHECK_INTERVAL_FRAMES = 30        # Reavalia a cena a cada ~6s (5 FPS)
+IR_DARK_LUMA_THRESHOLD = 90          # Luminância média abaixo disso = cena escura
+IR_CHANNEL_IMBALANCE_RATIO = 1.20    # Desbalanceo BGR acima disso = cast IR
 
 # Caminho para persistência de referência da cama
 BED_REFERENCE_PATH = "data/bed_reference.json"

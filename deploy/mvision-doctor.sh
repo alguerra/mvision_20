@@ -91,6 +91,12 @@ done
     && pass "aseto_v3_best.pt valido (validacao de calibracao ativa)" \
     || warnc "ASETO ausente - validacao cruzada da calibracao inativa"
 
+if ls "$PROJECT_DIR"/yolov8n-pose_ncnn_model/*.param &>/dev/null; then
+    pass "Backend NCNN presente (pose acelerada 2-4x)"
+else
+    warnc "Backend NCNN ausente - pose em PyTorch (mais lento); exporte com tools/export_ncnn_pose.py"
+fi
+
 echo ""
 echo "--- Calibracao da cama ---"
 BED_REF="$PROJECT_DIR/data/bed_reference.json"

@@ -69,12 +69,18 @@ from config import (
     POSE_FRAMES_PATIENT_DETECTED,
     POSE_FRAMES_TO_CONFIRM,
     WINDOW_NAME,
+    IR_CHANNEL_IMBALANCE_RATIO,
+    IR_CHECK_INTERVAL_FRAMES,
+    IR_DARK_LUMA_THRESHOLD,
+    IR_NORMALIZE_AUTO,
     YOLO_BED_MODEL,
+    YOLO_POSE_BACKEND,
     YOLO_POSE_CONFIDENCE,
     YOLO_POSE_IMGSZ,
     YOLO_POSE_IOU,
     YOLO_POSE_MAX_DET,
     YOLO_POSE_MODEL,
+    YOLO_POSE_NCNN_DIR,
 )
 from gui.display import DisplayManager
 from modules.alert_logger import AlertLogger
@@ -137,6 +143,26 @@ def normalize_frame_for_ir(frame: np.ndarray) -> np.ndarray:
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     lab[:, :, 0] = clahe.apply(lab[:, :, 0])
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def _needs_ir_normalization(frame: np.ndarray) -> bool:
+    """
+    Decide se a cena precisa da normalizacao IR (gray-world + CLAHE).
+
+    O custo dessa normalizacao em todo frame e relevante no RPi; ela so e
+    necessaria em cena escura ou com cast de cor tipico de camera IR.
+    Avaliada sobre versao subamostrada do frame (custo ~desprezivel).
+    """
+    sample = frame[::8, ::8]
+    channel_means = sample.reshape(-1, sample.shape[-1]).mean(axis=0)
+    luma = float(channel_means.mean())
+    if luma < IR_DARK_LUMA_THRESHOLD:
+        return True
+    min_channel = float(channel_means.min())
+    if min_channel <= 1.0:
+        return True
+    imbalance = float(channel_means.max()) / min_channel
+    return imbalance >= IR_CHANNEL_IMBALANCE_RATIO
 
 
 def _notify_systemd(message: bytes) -> None:
@@ -671,11 +697,26 @@ def initialize_system() -> Tuple[CameraBase, YOLO, BedDetector, DisplayManager, 
     # calibracao/recheck e liberado em seguida — evita OOM-kill no RPi.
     # O ASETO foi removido do pipeline (COCO histEq/raw assumiu a calibracao).
     print("\n[2/4] Validando e carregando modelo de pose...")
-    validate_model_file(YOLO_POSE_MODEL)
+    backend = str(YOLO_POSE_BACKEND).lower()
+    ncnn_dir = Path(YOLO_POSE_NCNN_DIR)
+    ncnn_ready = ncnn_dir.is_dir() and any(ncnn_dir.glob("*.param"))
+    if backend == "ncnn" and not ncnn_ready:
+        raise RuntimeError(
+            f"YOLO_POSE_BACKEND=ncnn mas '{YOLO_POSE_NCNN_DIR}' nao existe/incompleto. "
+            f"Exporte no notebook com: python tools/export_ncnn_pose.py"
+        )
+    use_ncnn = backend == "ncnn" or (backend == "auto" and ncnn_ready)
     send_heartbeat()
-    yolo_pose = YOLO(YOLO_POSE_MODEL)
+    if use_ncnn:
+        yolo_pose = YOLO(str(ncnn_dir))
+        print(f"    Modelo pose NCNN carregado ({YOLO_POSE_NCNN_DIR}) - backend acelerado ARM")
+    else:
+        validate_model_file(YOLO_POSE_MODEL)
+        yolo_pose = YOLO(YOLO_POSE_MODEL)
+        print(f"    Modelo {YOLO_POSE_MODEL} carregado (pose, PyTorch)")
+        if backend == "auto":
+            print("    Dica: exporte NCNN (tools/export_ncnn_pose.py) para 2-4x mais FPS")
     send_heartbeat()
-    print(f"    Modelo {YOLO_POSE_MODEL} carregado (pose)")
 
     # 3. Inicializa modulos
     print("\n[3/4] Inicializando modulos...")
@@ -748,6 +789,10 @@ def run_monitoring_loop(
     last_patient_centroid: Optional[Tuple[float, float]] = None
     last_person_count = 0
 
+    # Normalizacao IR sob demanda (decisao cacheada entre reavaliacoes)
+    ir_normalize_active = True
+    ir_frames_until_check = 0
+
     # Controle de heartbeat
     last_heartbeat = time.time()
 
@@ -789,20 +834,32 @@ def run_monitoring_loop(
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
 
-            # Frame cru para ASETO (antes da normalização IR)
-            raw_frame = frame.copy()
-
-            # Normaliza frame para cameras IR (remove distorcao de cor)
-            frame = normalize_frame_for_ir(frame)
-
             # Re-check da cama se necessario (ignorado em modo DEV_SKIP_BED_DETECTION).
             # Gate pela FSM: so recalibra com a CAMA VAZIA — paciente/cobertor
             # distorcem a deteccao (diretriz de campo: calibrar sem paciente).
             # Se o leito ficar ocupado por dias, o recheck simplesmente espera.
-            if (not DEV_SKIP_BED_DETECTION
+            recheck_due = (not DEV_SKIP_BED_DETECTION
                     and bed_detector.needs_recheck()
                     and pose_fsm.current_state == PoseStateMachineEMA.AGUARDANDO
-                    and last_person_count == 0):
+                    and last_person_count == 0)
+
+            # Frame cru so e necessario para o recheck (evento raro) — a copia
+            # incondicional custava um frame inteiro 5x/s a toa
+            raw_frame = frame.copy() if recheck_due else None
+
+            # Normalizacao IR sob demanda: cara no RPi e inutil em cena diurna
+            # bem balanceada; decisao reavaliada periodicamente e cacheada
+            if IR_NORMALIZE_AUTO:
+                if ir_frames_until_check <= 0:
+                    ir_normalize_active = _needs_ir_normalization(frame)
+                    ir_frames_until_check = IR_CHECK_INTERVAL_FRAMES
+                ir_frames_until_check -= 1
+            else:
+                ir_normalize_active = True
+            if ir_normalize_active:
+                frame = normalize_frame_for_ir(frame)
+
+            if recheck_due:
                 # Evento raro (a cada horas): carrega o modelo de cama, roda e
                 # libera. Heartbeat antes/depois pois o stall e de varios segundos
                 send_heartbeat()
@@ -922,38 +979,44 @@ def run_monitoring_loop(
             )
             last_person_count = person_count
 
-            # --- Renderizacao ---
-            frame = display.draw_bed_polygon(frame, bed_bbox)
+            # --- Renderizacao condicional ---
+            # Desenhar custa ~15-25% de CPU no RPi. So desenha com display real
+            # OU quando ha transicao de estado com evidencia a salvar (DEV_MODE)
+            state_changed = pose_state != previous_pose_state
+            draw_this_frame = display.should_draw() or (state_changed and DEV_MODE)
 
-            if body_points:
-                frame = display.draw_keypoints(frame, body_points, pose_state_enum, bed_bbox)
+            if draw_this_frame:
+                frame = display.draw_bed_polygon(frame, bed_bbox)
 
-            frame = display.draw_pose_state_message(frame, pose_state_enum)
+                if body_points:
+                    frame = display.draw_keypoints(frame, body_points, pose_state_enum, bed_bbox)
 
-            status = monitor.get_status()
-            if pose_state_enum == PatientPoseState.ACOMPANHADO:
-                status_text = f"STATUS: {status} | PESSOAS: {person_count} (acompanhado)"
-            elif pose_state_enum == PatientPoseState.PACIENTE_FORA:
-                status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - ALERTA CRITICO!"
-            elif pose_state_enum == PatientPoseState.RISCO_POTENCIAL:
-                status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - ATENCAO!"
-            elif pose_state_enum == PatientPoseState.ALERTA_PERSISTENTE:
-                status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - VERIFICAR PACIENTE!"
-            else:
-                status_text = f"STATUS: {status} | POSE: {pose_state_enum.value}"
+                frame = display.draw_pose_state_message(frame, pose_state_enum)
 
-            frame = display.draw_status(frame, status_text)
-            frame = display.draw_pose_dashboard(frame, body_points, pose_state_enum, analysis)
+                status = monitor.get_status()
+                if pose_state_enum == PatientPoseState.ACOMPANHADO:
+                    status_text = f"STATUS: {status} | PESSOAS: {person_count} (acompanhado)"
+                elif pose_state_enum == PatientPoseState.PACIENTE_FORA:
+                    status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - ALERTA CRITICO!"
+                elif pose_state_enum == PatientPoseState.RISCO_POTENCIAL:
+                    status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - ATENCAO!"
+                elif pose_state_enum == PatientPoseState.ALERTA_PERSISTENTE:
+                    status_text = f"STATUS: {status} | POSE: {pose_state_enum.value} - VERIFICAR PACIENTE!"
+                else:
+                    status_text = f"STATUS: {status} | POSE: {pose_state_enum.value}"
 
-            ema_scores = pose_fsm.get_scores()
-            frame = display.draw_ema_scores(frame, ema_scores)
+                frame = display.draw_status(frame, status_text)
+                frame = display.draw_pose_dashboard(frame, body_points, pose_state_enum, analysis)
+
+                ema_scores = pose_fsm.get_scores()
+                frame = display.draw_ema_scores(frame, ema_scores)
 
             # Detecta mudanca de estado e loga alertas
-            if pose_state != previous_pose_state:
+            if state_changed:
                 image_path = alert_logger.log_state_change(
                     previous_state=previous_pose_state,
                     new_state=pose_state,
-                    frame=frame,  # Frame ja tem anotacoes
+                    frame=frame if draw_this_frame else None,  # anotado quando desenhado
                 )
                 if image_path:
                     last_alert_image = image_path
@@ -971,16 +1034,17 @@ def run_monitoring_loop(
             else:
                 gpio_manager.stop_risk_alert()
 
-            # Feedback visual de alerta salvo
-            if time.time() < alert_feedback_until and last_alert_image:
-                frame = display.draw_log_feedback(
-                    frame,
-                    f"Alerta #{alert_logger.get_alert_count()}",
-                    alert_logger.get_image_count(),
-                )
-
-            # Renderiza frame no display
-            key = display.render(frame)
+            # Exibicao no display (apenas com display real)
+            key = -1
+            if display.should_draw():
+                # Feedback visual de alerta salvo
+                if time.time() < alert_feedback_until and last_alert_image:
+                    frame = display.draw_log_feedback(
+                        frame,
+                        f"Alerta #{alert_logger.get_alert_count()}",
+                        alert_logger.get_image_count(),
+                    )
+                key = display.render(frame)
 
             # Captura de teclas
             if key == ord("q") or key == ord("Q"):
