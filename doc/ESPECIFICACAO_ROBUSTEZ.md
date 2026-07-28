@@ -126,6 +126,24 @@ Executar com atores em quarto simulado, após P0 (feito) e antes da instalação
 - **Semana 2:** P1.1, P1.2, P1.5, P1.6 (instalar RTC), P1.8; iniciar V14 (soak 72 h) com P1.7 em shadow.
 - **Semana 3:** análise do soak + logs do shadow; correções finais; gate formal com a equipe clínica; instalação no hospital.
 
+## HARDENING ADICIONAL (revisão pós-P0)
+
+Itens identificados na revisão final de fragilidades. Os três primeiros estão **implementados**; o overlayroot fica documentado como passo de imagem do sistema.
+
+### Implementados
+1. **`data/` fora do git** — imagens de alerta, logs e `bed_reference.json` eram versionados; qualquer mudança em campo travava o `git pull` do deploy. Agora `data/`, `config/runtime_config.json` e `config/web_auth.json` estão no `.gitignore` e fora do índice. **Migração no RPi (uma única vez):** antes do primeiro pull desta versão, preserve a calibração: `cp data/bed_reference.json /tmp/ && git checkout -- data/ && git pull && cp /tmp/bed_reference.json data/`.
+2. **Watchdog de hardware** — `install.sh` cria `/etc/systemd/system.conf.d/mvision-watchdog.conf` com `RuntimeWatchdogSec=15` (chip `bcm2835_wdt`): kernel panic ou travamento do systemd reinicia o Pi sozinho. Efetivo após reboot.
+3. **Heartbeat visível no painel (anti-falha-silenciosa)** — o monitor publica `/tmp/mvision_status.json` (tmpfs, zero desgaste de SD) a cada 30 s com estado e contagem de pessoas. O backend web cruza isso com o systemd: serviço "active" mas sem sinal >90 s aparece como **"ATENCAO: SEM SINAL do monitor ha Xs"** no status existente do painel, e o endpoint `GET /api/monitor/status` expõe o estado ao vivo (para o frontend P1.4 e para checagens via `curl`).
+
+### Documentado (aplicar na imagem do sistema, com teste dedicado no RPi)
+4. **Raiz somente-leitura com overlayroot** — a proteção física definitiva contra corrupção de filesystem por corte de energia (as escritas do MVISION já são atômicas, mas o ext4 do SO não é imune). Procedimento sugerido (Raspberry Pi OS Bookworm):
+   1. `sudo apt install overlayroot` (com internet, antes do envio ao hospital);
+   2. mover `data/` e `config/` para uma partição gravável dedicada (ex: `/dev/mmcblk0p3` montada em `/mvision-data`) e criar symlinks `/mvision/data → /mvision-data/data` e `/mvision/config → /mvision-data/config`;
+   3. habilitar com `overlayroot="tmpfs"` em `/etc/overlayroot.conf`;
+   4. para manutenção/atualização: `sudo overlayroot-chroot` (ou desabilitar, atualizar, reabilitar);
+   5. validar V9 (cortes de energia) novamente com o overlay ativo.
+   Complementos de hardware recomendados: cartão SD industrial (ex: SanDisk High Endurance), fonte oficial 27 W e dissipador ativo (o `CPUQuota=90%` contínuo em ambiente quente causa throttling — que degrada o FPS e alonga todas as janelas da FSM, que são contadas em frames).
+
 ## COMO OPERAR AS NOVAS PROTEÇÕES
 
 - **Modo desenvolvimento:** `MVISION_DEV=1 python main.py` (imagens de evidência); `MVISION_SKIP_BED=1` (pular calibração). Em produção, nenhum dos dois é definido.
