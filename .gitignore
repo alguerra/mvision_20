@@ -34,3 +34,7 @@ config/environment.json
 /data/logs/
 /lab/
 /frame*
+# Dados de runtime (gerados no dispositivo, nunca versionar)
+data/
+config/runtime_config.json
+config/web_auth.json
