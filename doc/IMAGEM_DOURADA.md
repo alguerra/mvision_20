@@ -16,13 +16,21 @@ Este processo roda **no laboratório, com internet**, uma vez por release.
 
 ## 2. Instalar o MVISION
 
+O código vai para o Pi **via SSH a partir do notebook** — o dispositivo nunca tem git/credenciais. No notebook (pasta do projeto):
+
+```bash
+git archive --format=tar.gz -o mvision.tar.gz HEAD   # garante LF nos scripts
+scp mvision.tar.gz yolov8n-pose.pt yolov8l.pt aseto_v3_best.pt tmed@mvision.local:/home/tmed/
+```
+
+No Pi:
+
 ```bash
 sudo apt update && sudo apt full-upgrade -y
-sudo apt install -y git git-lfs
 sudo mkdir -p /mvision && sudo chown tmed:tmed /mvision
-git clone <repositorio> /mvision
-cd /mvision && git lfs pull        # OBRIGATORIO: baixa os .pt reais
-sudo bash deploy/install.sh        # idempotente; termina com "INSTALACAO OK"
+tar xzf ~/mvision.tar.gz -C /mvision
+mv ~/*.pt /mvision/ && rm ~/mvision.tar.gz
+sudo bash /mvision/deploy/install.sh   # idempotente; termina com "INSTALACAO OK"
 ```
 
 O instalador cuida de: dependências, serviços, journald 200M, watchdog de hardware, sudoers, display headless, `mvision-doctor`, atualizador USB e verificação final. Se terminar com erro, corrigir e rodar de novo — é seguro repetir.

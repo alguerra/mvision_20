@@ -46,23 +46,39 @@ Roteiro único e completo. Seguindo as etapas na ordem, ao final você terá o s
 
 **✔ Ponto de verificação:** você está num prompt `tmed@mvision:~ $`.
 
-## Etapa 3 — Baixar o código e os modelos
+## Etapa 3 — Copiar o código do notebook para o dispositivo
+
+O dispositivo **não usa git** (nenhum login/credencial no aparelho). O pacote é gerado no seu notebook e copiado via SSH.
+
+**3a. No notebook (Git Bash ou PowerShell, na pasta do projeto):**
 
 ```bash
-sudo apt update && sudo apt install -y git git-lfs
-sudo mkdir -p /mvision && sudo chown tmed:tmed /mvision
-git clone <URL-DO-REPOSITORIO> /mvision
-cd /mvision
-git lfs pull
+# Gera o pacote a partir do repositório — GARANTE fim de linha LF nos scripts
+# (copiar a pasta de trabalho direto do Windows pode levar CRLF e quebrar os .sh no Pi)
+git archive --format=tar.gz -o mvision.tar.gz HEAD
 ```
 
-> `git lfs pull` é **obrigatório**: sem ele os modelos `.pt` ficam como ponteiros de texto e o instalador vai acusar erro.
+**3b. Copiar pacote + modelos para o Pi** (os `.pt` vão separados — o archive exporta apenas ponteiros LFS):
+
+```bash
+scp mvision.tar.gz yolov8n-pose.pt yolov8l.pt aseto_v3_best.pt tmed@mvision.local:/home/tmed/
+```
+
+**3c. No Pi (via SSH), extrair:**
+
+```bash
+sudo mkdir -p /mvision && sudo chown tmed:tmed /mvision
+tar xzf ~/mvision.tar.gz -C /mvision
+mv ~/yolov8n-pose.pt ~/yolov8l.pt ~/aseto_v3_best.pt /mvision/
+rm ~/mvision.tar.gz
+```
 
 **✔ Ponto de verificação:**
 ```bash
-ls -lh /mvision/yolov8n-pose.pt /mvision/yolov8l.pt
+ls -lh /mvision/main.py /mvision/yolov8n-pose.pt /mvision/yolov8l.pt
+head -1 /mvision/deploy/install.sh
 ```
-Os arquivos devem ter **MB de tamanho** (ex.: 6M e 87M) — não 130 bytes.
+Os `.pt` devem ter **MB de tamanho** (ex.: 6M e 87M) — não 130 bytes — e a última linha deve mostrar exatamente `#!/bin/bash` (sem caracteres estranhos no final).
 
 ## Etapa 4 — Instalar
 
@@ -172,13 +188,21 @@ Copie os **dois arquivos** para a raiz de um pendrive (FAT32). No leito:
 
 O sistema valida o checksum, faz backup, aplica e reinicia sozinho (log em `/var/log/mvision-usb-update.log`). Pendrive esquecido não re-aplica a mesma versão.
 
-### Em bancada, com git
+### Em bancada, via SSH do notebook (sem git no dispositivo)
 
+No notebook (pasta do projeto):
 ```bash
-cd /mvision
-bash sync_code.sh            # git fetch + reset para origin/main
-sudo bash deploy/update.sh   # reinicia OS DOIS servicos e roda o mvision-doctor
+git archive --format=tar.gz -o mvision.tar.gz HEAD
+scp mvision.tar.gz tmed@mvision.local:/home/tmed/
 ```
+
+No Pi:
+```bash
+tar xzf ~/mvision.tar.gz -C /mvision && rm ~/mvision.tar.gz
+sudo bash /mvision/deploy/update.sh   # reinicia OS DOIS servicos e roda o mvision-doctor
+```
+
+> Se os modelos `.pt` mudaram, copie-os também (`scp *.pt tmed@...:/mvision/`). Se scripts de deploy ou units mudaram, rode `sudo bash /mvision/deploy/install.sh` em vez do `update.sh` (é idempotente e reinstala o que mudou).
 
 ---
 
@@ -190,7 +214,8 @@ sudo bash deploy/update.sh   # reinicia OS DOIS servicos e roda o mvision-doctor
 
 | Sintoma | Causa provável | Solução |
 |---|---|---|
-| `[FALHA] ... ponteiro Git LFS` | clone sem `git lfs pull` | `cd /mvision && git lfs pull` (com internet) e reinstalar |
+| `[FALHA] ... ponteiro Git LFS` | os `.pt` reais não foram copiados (foi o ponteiro de texto) | copiar os `.pt` verdadeiros do notebook: `scp *.pt tmed@mvision.local:/mvision/` |
+| `bash: /bin/bash^M` ou erro estranho nos scripts | código copiado com CRLF do Windows | refazer a Etapa 3 usando `git archive` (nunca copiar a pasta de trabalho direto) |
 | `[FALHA] NENHUMA camera detectada` | cabo flat solto/invertido | reconectar o flat (trava nas duas pontas) e reiniciar |
 | Painel não abre | serviço web parado / IP errado | `mvision-doctor`; conferir IP com `hostname -I` |
 | "SEM SINAL do monitor" no painel | monitor travado ou câmera falhou | `journalctl -u hospital-monitor -n 100`; religar o aparelho |
