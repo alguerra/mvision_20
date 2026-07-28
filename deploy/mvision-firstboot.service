@@ -1,0 +1,14 @@
+[Unit]
+Description=MVision - Provisionamento do primeiro boot (imagem dourada)
+After=local-fs.target
+Before=hospital-monitor.service mvision-web.service
+ConditionPathExists=!/var/lib/mvision-firstboot-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mvision-firstboot
+RemainAfterExit=yes
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

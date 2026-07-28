@@ -1,0 +1,13 @@
+[Unit]
+Description=MVision - Atualizacao offline via pendrive (verifica no boot)
+After=local-fs.target
+Before=hospital-monitor.service mvision-web.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mvision-usb-update
+RemainAfterExit=yes
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
