@@ -25,16 +25,25 @@ YOLO_MODEL = "yolov8n.pt"
 YOLO_POSE_MODEL = "yolov8n-pose.pt"
 
 # Backend de inferência de pose:
-#   "auto" = usa NCNN se o diretório exportado existir, senão PyTorch (.pt)
-#   "ncnn" = força NCNN (falha se ausente) | "pt" = força PyTorch
-# NCNN é 2-4x mais rápido em CPU ARM. Exportar no notebook com:
-#   python tools/export_ncnn_pose.py   (valida paridade de keypoints)
-YOLO_POSE_BACKEND = "auto"
+#   "pt"   = PyTorch (.pt) — comportamento de referência
+#   "auto" = usa NCNN se o diretório exportado existir, senão PyTorch
+#   "ncnn" = força NCNN (falha se ausente)
+# NCNN é 2-4x mais rápido em CPU ARM, mas a paridade medida com frames IR
+# do leito foi PARCIAL (4-7px nos keypoints usados — provavelmente
+# equivalente na FSM, nao comprovado). Default "pt" até a validação
+# funcional em campo (rodar tabela de teste da Etapa 8 + 1 noite de logs
+# com "ncnn" no leito de teste); então mudar para "auto".
+# Exportar/validar no notebook: python tools/export_ncnn_pose.py <frames>
+YOLO_POSE_BACKEND = "pt"
 YOLO_POSE_NCNN_DIR = "yolov8n-pose_ncnn_model"
 YOLO_POSE_CONFIDENCE = 0.20        # Confiança mínima para detecção de pessoas (default YOLO: 0.25)
 YOLO_POSE_IOU = 0.5                # NMS IoU explicito (default Ultralytics 0.7 e frouxo demais)
 YOLO_POSE_MAX_DET = 5              # Maximo de pessoas por frame (quarto hospitalar)
-YOLO_POSE_IMGSZ = 640              # Tamanho de inferencia explicito (nao depender de default)
+# Tamanho de inferencia explicito (altura, largura) = resolucao da camera.
+# PT ja inferia efetivamente em 640x480 (rect); o export NCNN usa o MESMO
+# shape estatico — pre-processamento identico nos dois backends (paridade)
+# e ~25% mais rapido que o quadrado 640x640.
+YOLO_POSE_IMGSZ = (480, 640)
 
 # Thresholds de confiança para keypoints
 POSE_CONFIDENCE_HIGH = 0.7        # Confiança alta (ponto confiável)

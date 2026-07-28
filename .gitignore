@@ -38,3 +38,6 @@ config/environment.json
 data/
 config/runtime_config.json
 config/web_auth.json
+
+# Backend NCNN exportado (artefato gerado; copiar manualmente apos validacao)
+yolov8n-pose_ncnn_model/

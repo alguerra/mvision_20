@@ -33,8 +33,9 @@ from config import (
     YOLO_POSE_NCNN_DIR,
 )
 
-PARITY_MEAN_PX_MAX = 2.0   # Criterio de aceite (media por imagem)
-MATCH_IOU_MIN = 0.5        # Pareamento de deteccoes entre backends
+PARITY_MEAN_PX_MAX = 2.0    # Paridade PLENA: ativacao automatica OK
+PARITY_MEAN_PX_PARTIAL = 10.0  # Paridade PARCIAL: exige validacao funcional em campo
+MATCH_IOU_MIN = 0.5         # Pareamento de deteccoes entre backends
 
 
 def _predict(model, image_path):
@@ -144,11 +145,17 @@ def main():
     print(f"    Diferenca de keypoints: media {mean_diff:.2f} px | pior caso {max_diff:.2f} px")
 
     if mean_diff < PARITY_MEAN_PX_MAX:
-        print(f"\nPARIDADE OK (media < {PARITY_MEAN_PX_MAX} px).")
-        print(f"Copie a pasta {YOLO_POSE_NCNN_DIR}/ para /mvision no dispositivo.")
+        print(f"\nPARIDADE PLENA (media < {PARITY_MEAN_PX_MAX} px).")
+        print(f"Copie {YOLO_POSE_NCNN_DIR}/ para /mvision e use YOLO_POSE_BACKEND='auto'.")
+    elif mean_diff < PARITY_MEAN_PX_PARTIAL:
+        print(f"\nPARIDADE PARCIAL (media {mean_diff:.1f} px, entre {PARITY_MEAN_PX_MAX} e {PARITY_MEAN_PX_PARTIAL}).")
+        print("Provavelmente equivalente na FSM (margens da cama sao 40-140px), mas NAO comprovado.")
+        print("Ative APENAS no leito de teste (YOLO_POSE_BACKEND='ncnn'), rode a tabela")
+        print("funcional da Etapa 8 do INSTALACAO.md e compare 1 noite de logs antes de")
+        print("promover para 'auto' em producao.")
     else:
-        print(f"\nPARIDADE REPROVADA (media >= {PARITY_MEAN_PX_MAX} px).")
-        print("NAO ative NCNN em producao. Revalide o export/versao do ultralytics.")
+        print(f"\nPARIDADE REPROVADA (media >= {PARITY_MEAN_PX_PARTIAL} px).")
+        print("NAO ative NCNN. Revalide o export/versao do ultralytics.")
         sys.exit(1)
 
 
