@@ -8,6 +8,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,7 +16,32 @@ from typing import Any, Optional
 BASE_DIR = Path(__file__).parent.parent.parent
 ENVIRONMENT_CONFIG_PATH = BASE_DIR / "config" / "environment.json"
 SYSTEM_CONFIG_PATH = BASE_DIR / "config.py"
+RUNTIME_CONFIG_PATH = BASE_DIR / "config" / "runtime_config.json"
 SERVICE_NAME = "hospital-monitor"
+
+# Permite importar modulos do projeto (escrita atomica e whitelist de chaves)
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+from modules.atomic_io import atomic_write_json
+
+# Chaves que o painel pode editar (espelha config.RUNTIME_EDITABLE_KEYS).
+# IMPORTANTE: o painel NUNCA reescreve config.py — apenas o JSON de runtime.
+try:
+    from config import RUNTIME_EDITABLE_KEYS
+except Exception:
+    RUNTIME_EDITABLE_KEYS = [
+        "FLIP_HORIZONTAL",
+        "BED_RECHECK_INTERVAL_HOURS",
+        "BED_DETECTION_SENSITIVITY",
+        "EMA_ALPHA",
+        "EMA_THRESHOLD_ENTER_RISK",
+        "EMA_THRESHOLD_EXIT_RISK",
+        "POSE_CONFIDENCE_HIGH",
+        "POSE_FRAMES_TO_CONFIRM",
+        "FRAMES_TO_LOSE_PATIENT",
+        "COMPANION_ANALYSIS_ENABLED",
+    ]
 
 
 def get_environment_config() -> dict:
@@ -42,14 +68,28 @@ def save_environment_config(config: dict) -> tuple[bool, str]:
         return False, f"Erro ao salvar configuração: {str(e)}"
 
 
-def get_system_settings() -> dict:
+def _read_runtime_overrides() -> dict:
+    """Le overrides atuais do runtime_config.json (vazio se ausente/corrompido)."""
+    try:
+        if RUNTIME_CONFIG_PATH.exists():
+            with open(RUNTIME_CONFIG_PATH, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+def _read_config_defaults() -> dict:
     """
-    Read system settings from config.py.
-    Returns a dict with key settings.
+    Le os DEFAULTS do config.py por regex (somente leitura, nunca escreve).
+    DEV_MODE/DEV_SKIP_BED_DETECTION vem de variavel de ambiente e sao
+    reportados apenas informativamente.
     """
     settings = {
-        "DEV_MODE": False,
-        "DEV_SKIP_BED_DETECTION": False,
+        "DEV_MODE": os.environ.get("MVISION_DEV", "0") == "1",
+        "DEV_SKIP_BED_DETECTION": os.environ.get("MVISION_SKIP_BED", "0") == "1",
         "FLIP_HORIZONTAL": True,
         "BED_RECHECK_INTERVAL_HOURS": 6,
         "POSE_FRAMES_TO_CONFIRM": 10,
@@ -57,6 +97,9 @@ def get_system_settings() -> dict:
         "EMA_THRESHOLD_ENTER_RISK": 0.5,
         "EMA_THRESHOLD_EXIT_RISK": 0.3,
         "BED_DETECTION_SENSITIVITY": 5,
+        "POSE_CONFIDENCE_HIGH": 0.7,
+        "FRAMES_TO_LOSE_PATIENT": 15,
+        "COMPANION_ANALYSIS_ENABLED": True,
     }
 
     if not SYSTEM_CONFIG_PATH.exists():
@@ -66,20 +109,19 @@ def get_system_settings() -> dict:
         with open(SYSTEM_CONFIG_PATH, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Parse boolean settings
-        for key in ["DEV_MODE", "DEV_SKIP_BED_DETECTION", "FLIP_HORIZONTAL"]:
+        for key in ["FLIP_HORIZONTAL", "COMPANION_ANALYSIS_ENABLED"]:
             match = re.search(rf'^{key}\s*=\s*(True|False)', content, re.MULTILINE)
             if match:
                 settings[key] = match.group(1) == "True"
 
-        # Parse numeric settings
-        for key in ["BED_RECHECK_INTERVAL_HOURS", "POSE_FRAMES_TO_CONFIRM", "BED_DETECTION_SENSITIVITY"]:
+        for key in ["BED_RECHECK_INTERVAL_HOURS", "POSE_FRAMES_TO_CONFIRM",
+                    "BED_DETECTION_SENSITIVITY", "FRAMES_TO_LOSE_PATIENT"]:
             match = re.search(rf'^{key}\s*=\s*(\d+)', content, re.MULTILINE)
             if match:
                 settings[key] = int(match.group(1))
 
-        # Parse float settings
-        for key in ["EMA_ALPHA", "EMA_THRESHOLD_ENTER_RISK", "EMA_THRESHOLD_EXIT_RISK"]:
+        for key in ["EMA_ALPHA", "EMA_THRESHOLD_ENTER_RISK",
+                    "EMA_THRESHOLD_EXIT_RISK", "POSE_CONFIDENCE_HIGH"]:
             match = re.search(rf'^{key}\s*=\s*([\d.]+)', content, re.MULTILINE)
             if match:
                 settings[key] = float(match.group(1))
@@ -90,55 +132,44 @@ def get_system_settings() -> dict:
     return settings
 
 
-def save_system_settings(settings: dict) -> tuple[bool, str]:
-    """
-    Update system settings in config.py.
-    Only updates specified keys, preserves the rest.
-    """
-    if not SYSTEM_CONFIG_PATH.exists():
-        return False, "Arquivo config.py não encontrado"
+def get_system_settings() -> dict:
+    """Configuracoes efetivas: defaults do config.py + overlay do runtime json."""
+    settings = _read_config_defaults()
+    overrides = _read_runtime_overrides()
+    for key, value in overrides.items():
+        if key in settings:
+            settings[key] = value
+    return settings
 
+
+def save_system_settings(settings: dict) -> tuple:
+    """
+    Persiste configuracoes editaveis em config/runtime_config.json (escrita
+    ATOMICA — um corte de energia nunca corrompe a configuracao nem impede
+    o boot; o config.py nao e mais tocado pelo painel).
+    """
     try:
-        with open(SYSTEM_CONFIG_PATH, "r", encoding="utf-8") as f:
-            content = f.read()
+        # Valida e filtra pela whitelist
+        current = _read_runtime_overrides()
+        rejected = []
+        for key, value in settings.items():
+            if key not in RUNTIME_EDITABLE_KEYS:
+                # DEV_MODE etc.: apenas via variavel de ambiente
+                if key not in ("DEV_MODE", "DEV_SKIP_BED_DETECTION"):
+                    rejected.append(key)
+                continue
+            if not isinstance(value, (bool, int, float, str)):
+                rejected.append(key)
+                continue
+            current[key] = value
 
-        # Update boolean settings
-        for key in ["DEV_MODE", "DEV_SKIP_BED_DETECTION", "FLIP_HORIZONTAL"]:
-            if key in settings:
-                value = "True" if settings[key] else "False"
-                content = re.sub(
-                    rf'^({key}\s*=\s*)(True|False)',
-                    rf'\g<1>{value}',
-                    content,
-                    flags=re.MULTILINE
-                )
+        atomic_write_json(RUNTIME_CONFIG_PATH, current)
 
-        # Update integer settings
-        for key in ["BED_RECHECK_INTERVAL_HOURS", "POSE_FRAMES_TO_CONFIRM", "BED_DETECTION_SENSITIVITY"]:
-            if key in settings:
-                value = int(settings[key])
-                content = re.sub(
-                    rf'^({key}\s*=\s*)\d+',
-                    rf'\g<1>{value}',
-                    content,
-                    flags=re.MULTILINE
-                )
-
-        # Update float settings
-        for key in ["EMA_ALPHA", "EMA_THRESHOLD_ENTER_RISK", "EMA_THRESHOLD_EXIT_RISK"]:
-            if key in settings:
-                value = float(settings[key])
-                content = re.sub(
-                    rf'^({key}\s*=\s*)[\d.]+',
-                    rf'\g<1>{value}',
-                    content,
-                    flags=re.MULTILINE
-                )
-
-        with open(SYSTEM_CONFIG_PATH, "w", encoding="utf-8") as f:
-            f.write(content)
-
-        return True, "Configurações salvas com sucesso"
+        message = "Configurações salvas com sucesso"
+        if rejected:
+            message += f" (ignoradas: {', '.join(rejected)})"
+        message += ". Reinicie o serviço para aplicar."
+        return True, message
     except Exception as e:
         return False, f"Erro ao salvar configurações: {str(e)}"
 
@@ -151,15 +182,26 @@ def get_system_info() -> dict:
         "platform": "unknown"
     }
 
-    # Get IP addresses
+    # Get IP addresses — SEM referencia externa (sistema offline):
+    # enumera interfaces locais via hostname/getaddrinfo e `hostname -I`
     try:
-        # Try to get the main IP
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        info["ip_addresses"].append(s.getsockname()[0])
-        s.close()
+        host_ips = socket.gethostbyname_ex(socket.gethostname())[2]
+        info["ip_addresses"].extend(
+            ip for ip in host_ips if not ip.startswith("127.")
+        )
     except Exception:
         pass
+
+    if not info["ip_addresses"]:
+        try:
+            result = subprocess.run(
+                ["hostname", "-I"], capture_output=True, text=True, timeout=5
+            )
+            info["ip_addresses"].extend(
+                ip for ip in result.stdout.split() if not ip.startswith("127.")
+            )
+        except Exception:
+            pass
 
     # Detect platform
     try:

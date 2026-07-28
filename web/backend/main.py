@@ -20,6 +20,7 @@ from auth import (
     create_session,
     verify_session,
     invalidate_session,
+    must_change_password,
 )
 from config_manager import (
     get_environment_config,
@@ -119,7 +120,12 @@ async def login(request: LoginRequest, response: Response):
             max_age=86400,  # 24 hours
             samesite="lax"
         )
-        return {"success": True, "message": "Login realizado com sucesso"}
+        return {
+            "success": True,
+            "message": "Login realizado com sucesso",
+            # Senha padrao de fabrica ainda ativa: cliente deve exigir troca
+            "must_change_password": must_change_password(),
+        }
     else:
         raise HTTPException(status_code=401, detail="Senha incorreta")
 
