@@ -22,7 +22,7 @@ class GPIOAlertManager:
         self.gpio_available = False
         self._alert_thread: Optional[threading.Thread] = None
         self._alert_active = threading.Event()
-        self._alert_restart = threading.Event()  # Sinaliza re-trigger do timer
+        self._generation = 0  # Identifica o episodio de alerta da thread atual
         self._system_ready = False
 
         if self.is_raspberry_pi:
@@ -98,43 +98,56 @@ class GPIOAlertManager:
             print(f"[GPIO SIMULADO] Sistema configurado: {status} (GPIO {GPIO_PIN_SYSTEM_READY})")
 
     def start_risk_alert(self) -> None:
-        """Inicia pisca-pisca de alerta (GPIO 16)."""
-        # Se ja existe um alerta ativo, apenas re-trigger o timer
-        if self._alert_thread is not None and self._alert_thread.is_alive():
-            self._alert_restart.set()  # Reseta o timer na thread existente
-            return
+        """
+        Inicia episodio de alerta (GPIO 16).
+
+        Idempotente e barato: chamado a cada frame enquanto houver alerta,
+        mas so cria a thread na TRANSICAO para alerta. O LED pisca por no
+        maximo GPIO_ALERT_DURATION por episodio; o episodio so termina em
+        stop_risk_alert() (estado saiu de alerta).
+        """
+        if self._alert_active.is_set():
+            return  # Episodio ja em curso (piscando ou expirado)
 
         self._alert_active.set()
-        self._alert_restart.clear()
-        self._alert_thread = threading.Thread(target=self._alert_blink_loop, daemon=True)
+        self._generation += 1
+        self._alert_thread = threading.Thread(
+            target=self._alert_blink_loop,
+            args=(self._generation,),
+            daemon=True,
+        )
         self._alert_thread.start()
 
     def stop_risk_alert(self) -> None:
-        """Para o pisca-pisca de alerta."""
+        """
+        Encerra episodio de alerta.
+
+        NAO bloqueia (sem join): chamado a cada frame sem alerta, nao pode
+        roubar tempo do loop principal. A thread termina sozinha ao ver o
+        evento limpo; a checagem de geracao impede que uma thread antiga
+        interfira num episodio novo.
+        """
+        if not self._alert_active.is_set():
+            return
         self._alert_active.clear()
-        if self._alert_thread is not None and self._alert_thread.is_alive():
-            self._alert_thread.join(timeout=1.0)
         self._alert_thread = None
 
         # Garante que LED fica desligado
         if self.is_raspberry_pi and self.gpio_available:
             self.GPIO.output(GPIO_PIN_ALERT, self.GPIO.LOW)
 
-    def _alert_blink_loop(self) -> None:
-        """Loop que pisca o LED de alerta por tempo limitado."""
+    def _alert_blink_loop(self, generation: int) -> None:
+        """Pisca o LED por ate GPIO_ALERT_DURATION e aguarda o fim do episodio."""
         blink_state = False
         start_time = time.time()
 
-        while self._alert_active.is_set():
-            # Re-trigger: reseta o timer quando start_risk_alert() eh chamado novamente
-            if self._alert_restart.is_set():
-                start_time = time.time()
-                self._alert_restart.clear()
+        def _episode_alive() -> bool:
+            return self._alert_active.is_set() and self._generation == generation
 
-            # Verifica se excedeu a duracao maxima
+        while _episode_alive():
             elapsed = time.time() - start_time
             if elapsed >= GPIO_ALERT_DURATION:
-                print(f"[GPIO] Alerta encerrado apos {GPIO_ALERT_DURATION}s")
+                print(f"[GPIO] LED de alerta encerrado apos {GPIO_ALERT_DURATION}s (episodio continua ativo)")
                 break
 
             blink_state = not blink_state
@@ -147,14 +160,20 @@ class GPIOAlertManager:
 
             time.sleep(GPIO_BLINK_INTERVAL)
 
-        # Garante LED desligado ao finalizar
-        self._alert_active.clear()
+        # LED desligado; permanece ociosa ate o fim do episodio para que
+        # start_risk_alert() nao recrie a thread e reinicie o timer de 30s
         if self.is_raspberry_pi and self.gpio_available:
             self.GPIO.output(GPIO_PIN_ALERT, self.GPIO.LOW)
 
+        while _episode_alive():
+            time.sleep(0.2)
+
     def cleanup(self) -> None:
         """Limpa recursos GPIO ao encerrar."""
+        thread = self._alert_thread
         self.stop_risk_alert()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)  # Aceitavel: so no shutdown
         self.set_system_ready(False)
 
         if self.is_raspberry_pi and self.gpio_available:

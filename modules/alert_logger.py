@@ -10,6 +10,7 @@ Formato do log:
 
 import logging
 import os
+import time
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -19,6 +20,7 @@ import cv2
 import numpy as np
 
 from config import (
+    ALERT_IMAGE_COOLDOWN_SECONDS,
     ALERT_IMAGES_DIR,
     ALERT_LOG_PATH,
     ALERT_LOG_RETENTION_DAYS,
@@ -73,6 +75,12 @@ class AlertLogger:
 
         # Contador de alertas
         self.alert_count = 0
+
+        # Anti-flood: cooldown de imagem por par de transicao e agrupamento
+        # de transicoes consecutivas de alerta em episodios
+        self._last_image_time: dict = {}
+        self._episode_id = 0
+        self._in_alert_episode = False
 
     def _ensure_directories(self) -> None:
         """Cria diretorios necessarios se nao existem."""
@@ -202,14 +210,39 @@ class AlertLogger:
         Returns:
             Caminho da imagem salva ou string vazia
         """
-        details = f"Transicao: {previous_state} -> {new_state}"
-
         # Determina se eh um alerta
-        alert_states = ["RISCO_POTENCIAL", "PACIENTE_FORA"]
+        alert_states = ["RISCO_POTENCIAL", "PACIENTE_FORA", "ALERTA_PERSISTENTE"]
 
         if new_state in alert_states:
-            return self.log_alert(new_state, frame, details)
+            # Transicoes consecutivas entre estados de alerta pertencem ao
+            # mesmo episodio clinico (evita parecer varios eventos distintos)
+            if not self._in_alert_episode:
+                self._episode_id += 1
+            self._in_alert_episode = True
+
+            details = (
+                f"Transicao: {previous_state} -> {new_state} | "
+                f"episodio={self._episode_id}"
+            )
+
+            # Cooldown de imagem por par (from, to): flapping nao pode expulsar
+            # as evidencias anteriores da retencao FIFO
+            transition_key = (previous_state, new_state)
+            now = time.time()
+            last_image = self._last_image_time.get(transition_key, 0.0)
+            allow_image = (now - last_image) >= ALERT_IMAGE_COOLDOWN_SECONDS
+
+            image_path = self.log_alert(
+                new_state,
+                frame if allow_image else None,
+                details,
+            )
+            if image_path:
+                self._last_image_time[transition_key] = now
+            return image_path
         else:
+            self._in_alert_episode = False
+            details = f"Transicao: {previous_state} -> {new_state}"
             # Loga transicao normal
             # Formato: TRANSICAO | NOVO_ESTADO | Detalhes
             self.logger.info(f"TRANSICAO | {new_state} | {details}")
