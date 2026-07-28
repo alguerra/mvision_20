@@ -1,181 +1,305 @@
 #!/bin/bash
 # =============================================================================
-# Script de instalação do Sistema de Monitoramento no Raspberry Pi
+# MVISION — Instalador consolidado e IDEMPOTENTE
 # =============================================================================
 #
 # USO:
-#   cd /mvision/deploy
-#   sudo bash install.sh
+#   sudo bash deploy/install.sh                 # instala/repara tudo
+#   sudo bash deploy/install.sh --prepare-image # prepara SD para virar imagem
+#                                               # dourada (limpa segredos e
+#                                               # habilita firstboot) e desliga
 #
-# O QUE FAZ:
-#   - Instala o serviço systemd (inicia automaticamente no boot)
-#   - Configura permissões para câmera e GPIO
-#   - NÃO copia arquivos - roda direto do diretório atual
+# Pode ser executado QUANTAS VEZES for necessário: cada etapa verifica o
+# estado atual e só age no que falta. Substitui os antigos install-web.sh e
+# setup-display.sh (mantidos como atalhos para este script).
 #
-# APÓS MODIFICAR O CÓDIGO:
-#   sudo systemctl restart hospital-monitor
+# Funciona OFFLINE: dependências apt/pip só são instaladas se faltarem E
+# houver internet; se faltarem sem internet, o instalador acusa com clareza.
 #
+# Ao final, roda a verificação (mvision-doctor). Só imprime "INSTALACAO OK"
+# se o sistema estiver de fato operante.
 # =============================================================================
 
-set -e
+set -u  # (sem -e: cada etapa trata o próprio erro para o resumo final)
 
-# Detecta o diretório do código fonte (pai do deploy/)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+SERVICE_USER="${MVISION_USER:-tmed}"
+SERVICE_GROUP="$SERVICE_USER"
 
-# Usuário que executa o serviço (dono do diretório do projeto)
-SERVICE_USER="tmed"
-SERVICE_GROUP="tmed"
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+ERRORS=0
+WARNINGS=0
 
-echo "=============================================="
-echo "Instalação do Sistema de Monitoramento"
-echo "=============================================="
+ok()   { echo -e "  ${GREEN}[OK]${NC} $1"; }
+warn() { echo -e "  ${YELLOW}[AVISO]${NC} $1"; WARNINGS=$((WARNINGS+1)); }
+fail() { echo -e "  ${RED}[ERRO]${NC} $1"; ERRORS=$((ERRORS+1)); }
+
+has_internet() {
+    # Checagem local e rápida; nunca falha o script
+    timeout 3 bash -c "exec 3<>/dev/tcp/deb.debian.org/80" 2>/dev/null && return 0
+    return 1
+}
+
+PREPARE_IMAGE=0
+[ "${1:-}" = "--prepare-image" ] && PREPARE_IMAGE=1
+
+echo "=============================================================="
+echo " MVISION - Instalador (idempotente)"
+echo " Projeto: $PROJECT_DIR | Usuario do servico: $SERVICE_USER"
+echo "=============================================================="
+
+# -----------------------------------------------------------------------------
 echo ""
-echo "Diretório do projeto: $PROJECT_DIR"
-echo "Usuário do serviço: $SERVICE_USER"
-echo ""
-
-# Verifica se está rodando como root
+echo "[1/10] Pre-requisitos"
+# -----------------------------------------------------------------------------
 if [ "$EUID" -ne 0 ]; then
-    echo "ERRO: Execute como root:"
-    echo "  sudo bash install.sh"
+    echo -e "${RED}Execute como root: sudo bash deploy/install.sh${NC}"
     exit 1
 fi
+[ -f "$PROJECT_DIR/main.py" ] && ok "main.py encontrado" || { fail "main.py nao encontrado em $PROJECT_DIR"; exit 1; }
+id "$SERVICE_USER" &>/dev/null && ok "Usuario $SERVICE_USER existe" || {
+    useradd -m -s /bin/bash "$SERVICE_USER" && ok "Usuario $SERVICE_USER criado" || fail "Falha ao criar usuario $SERVICE_USER"
+}
 
-# Verifica se main.py existe
-if [ ! -f "$PROJECT_DIR/main.py" ]; then
-    echo "ERRO: main.py não encontrado em $PROJECT_DIR"
-    exit 1
+# -----------------------------------------------------------------------------
+echo ""
+echo "[2/10] Dependencias do sistema (apt)"
+# -----------------------------------------------------------------------------
+APT_PKGS=(git git-lfs python3-pip python3-opencv python3-picamera2 curl)
+MISSING_APT=()
+for pkg in "${APT_PKGS[@]}"; do
+    dpkg -s "$pkg" &>/dev/null || MISSING_APT+=("$pkg")
+done
+if [ ${#MISSING_APT[@]} -eq 0 ]; then
+    ok "Todos os pacotes apt presentes"
+elif has_internet; then
+    echo "  Instalando: ${MISSING_APT[*]}"
+    apt-get update -qq && apt-get install -y -qq "${MISSING_APT[@]}" \
+        && ok "Pacotes instalados" || fail "Falha no apt-get install"
+else
+    fail "Pacotes faltando SEM internet: ${MISSING_APT[*]} (use a imagem dourada ou conecte a rede)"
 fi
 
-# 1. Configura o arquivo de serviço com o caminho correto
-echo "[1/4] Configurando serviço systemd..."
-cat > /etc/systemd/system/hospital-monitor.service << EOF
-[Unit]
-Description=Sistema de Monitoramento de Quedas Hospitalares
-After=multi-user.target
-Wants=graphical.target
-StartLimitIntervalSec=0
-
-[Service]
-Type=notify
-NotifyAccess=main
-User=$SERVICE_USER
-Group=$SERVICE_GROUP
-WorkingDirectory=$PROJECT_DIR
-ExecStart=/usr/bin/python3 -u $PROJECT_DIR/main.py
-Restart=always
-RestartSec=10
-WatchdogSec=90
-StandardOutput=journal
-StandardError=journal
-Environment=PYTHONUNBUFFERED=1
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/$SERVICE_USER/.Xauthority
-Environment=YOLO_OFFLINE=True
-Environment=ULTRALYTICS_OFFLINE=True
-Environment=YOLO_AUTOINSTALL=False
-TimeoutStartSec=300
-TimeoutStopSec=30
-MemoryHigh=640M
-MemoryMax=768M
-CPUQuota=90%
-SupplementaryGroups=gpio video
-
-[Install]
-WantedBy=multi-user.target
+# -----------------------------------------------------------------------------
+echo ""
+echo "[3/10] Dependencias Python"
+# -----------------------------------------------------------------------------
+PY_CHECK=$(sudo -u "$SERVICE_USER" python3 - <<'EOF' 2>/dev/null
+mods = ["cv2", "numpy", "ultralytics", "fastapi", "uvicorn", "pydantic"]
+missing = []
+for m in mods:
+    try:
+        __import__(m)
+    except Exception:
+        missing.append(m)
+print(",".join(missing))
 EOF
+)
+if [ -z "$PY_CHECK" ]; then
+    ok "Modulos Python presentes (cv2, ultralytics, fastapi, uvicorn)"
+elif has_internet; then
+    echo "  Instalando modulos Python faltantes: $PY_CHECK"
+    if [ -f "$PROJECT_DIR/requirements_raspberry.txt" ]; then
+        pip3 install --quiet --break-system-packages -r "$PROJECT_DIR/requirements_raspberry.txt" \
+            && ok "Dependencias Python instaladas" || fail "Falha no pip install"
+    else
+        pip3 install --quiet --break-system-packages ultralytics fastapi uvicorn python-multipart pydantic \
+            && ok "Dependencias Python instaladas" || fail "Falha no pip install"
+    fi
+else
+    fail "Modulos Python faltando SEM internet: $PY_CHECK (use a imagem dourada)"
+fi
 
-echo "  Serviço configurado para: $PROJECT_DIR"
+# -----------------------------------------------------------------------------
+echo ""
+echo "[4/10] Modelos YOLO"
+# -----------------------------------------------------------------------------
+for model in "$PROJECT_DIR/yolov8n-pose.pt" "$PROJECT_DIR/yolov8l.pt"; do
+    name=$(basename "$model")
+    if [ ! -f "$model" ]; then
+        fail "$name nao encontrado (copie o arquivo ou rode git lfs pull com internet)"
+    elif head -c 24 "$model" | grep -q "version https"; then
+        fail "$name e um PONTEIRO Git LFS, nao o modelo real. Rode: git lfs pull"
+    else
+        ok "$name valido ($(du -h "$model" | cut -f1))"
+    fi
+done
+# ASETO e opcional (validacao cruzada da calibracao)
+if [ -f "$PROJECT_DIR/aseto_v3_best.pt" ] && ! head -c 24 "$PROJECT_DIR/aseto_v3_best.pt" | grep -q "version https"; then
+    ok "aseto_v3_best.pt valido (validacao cruzada ativa)"
+else
+    warn "aseto_v3_best.pt ausente/invalido - validacao cruzada da calibracao ficara inativa"
+fi
 
-# 1b. Limita o journald (padrão = 10% do SD card; inaceitável em produção)
-echo "[1b/4] Configurando limite do journald..."
+# -----------------------------------------------------------------------------
+echo ""
+echo "[5/10] Servicos systemd (fonte unica: deploy/*.service)"
+# -----------------------------------------------------------------------------
+install_unit() {
+    local template="$1" target="$2"
+    # Adapta caminhos/usuario do template para esta instalacao
+    sed -e "s|/mvision|$PROJECT_DIR|g" \
+        -e "s|User=tmed|User=$SERVICE_USER|" \
+        -e "s|Group=tmed|Group=$SERVICE_GROUP|" \
+        -e "s|/home/tmed|/home/$SERVICE_USER|g" \
+        "$template" > "/tmp/$(basename "$target")"
+    if [ -f "$target" ] && cmp -s "/tmp/$(basename "$target")" "$target"; then
+        ok "$(basename "$target") ja atualizado"
+    else
+        cp "/tmp/$(basename "$target")" "$target"
+        NEED_DAEMON_RELOAD=1
+        ok "$(basename "$target") instalado/atualizado"
+    fi
+    rm -f "/tmp/$(basename "$target")"
+}
+NEED_DAEMON_RELOAD=0
+install_unit "$SCRIPT_DIR/hospital-monitor.service" /etc/systemd/system/hospital-monitor.service
+install_unit "$SCRIPT_DIR/mvision-web.service" /etc/systemd/system/mvision-web.service
+install_unit "$SCRIPT_DIR/mvision-web-healthcheck.service" /etc/systemd/system/mvision-web-healthcheck.service
+install_unit "$SCRIPT_DIR/mvision-web-healthcheck.timer" /etc/systemd/system/mvision-web-healthcheck.timer
+install_unit "$SCRIPT_DIR/mvision-usb-update.service" /etc/systemd/system/mvision-usb-update.service
+[ "$NEED_DAEMON_RELOAD" = 1 ] && systemctl daemon-reload
+
+# -----------------------------------------------------------------------------
+echo ""
+echo "[6/10] Configuracao do sistema (journald, watchdog, sudoers)"
+# -----------------------------------------------------------------------------
 mkdir -p /etc/systemd/journald.conf.d
-cat > /etc/systemd/journald.conf.d/mvision.conf << EOF
+if [ ! -f /etc/systemd/journald.conf.d/mvision.conf ]; then
+    cat > /etc/systemd/journald.conf.d/mvision.conf << 'EOF'
 [Journal]
 SystemMaxUse=200M
 SystemKeepFree=1G
 EOF
-systemctl restart systemd-journald || true
-echo "  journald limitado a 200M"
+    systemctl restart systemd-journald || true
+    ok "journald limitado a 200M"
+else
+    ok "journald ja configurado"
+fi
 
-# 1d. Watchdog de HARDWARE (bcm2835_wdt): reinicia o Pi se o kernel/systemd
-# travar — sem acesso remoto, e a unica recuperacao para travamento total
-echo "[1d/4] Habilitando watchdog de hardware..."
 mkdir -p /etc/systemd/system.conf.d
-cat > /etc/systemd/system.conf.d/mvision-watchdog.conf << EOF
+if [ ! -f /etc/systemd/system.conf.d/mvision-watchdog.conf ]; then
+    cat > /etc/systemd/system.conf.d/mvision-watchdog.conf << 'EOF'
 [Manager]
 RuntimeWatchdogSec=15
 RebootWatchdogSec=2min
 EOF
-echo "  Watchdog de hardware configurado (efetivo apos reboot)"
+    ok "Watchdog de hardware configurado (efetivo apos reboot)"
+else
+    ok "Watchdog de hardware ja configurado"
+fi
 
-# 1c. Valida modelos (clone sem git-lfs deixa ponteiros de texto no lugar dos .pt)
-echo "[1c/4] Validando modelos..."
-for model in "$PROJECT_DIR/yolov8n-pose.pt" "$PROJECT_DIR/yolov8l.pt"; do
-    if [ ! -f "$model" ]; then
-        echo "  AVISO: $model não encontrado"
-    elif head -c 24 "$model" | grep -q "version https"; then
-        echo "  ERRO: $model é um ponteiro Git LFS! Execute: git lfs pull"
-        exit 1
+SUDOERS_FILE=/etc/sudoers.d/mvision-web
+SUDOERS_LINE="$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart hospital-monitor"
+if [ ! -f "$SUDOERS_FILE" ] || ! grep -qF "$SUDOERS_LINE" "$SUDOERS_FILE"; then
+    echo "$SUDOERS_LINE" > "$SUDOERS_FILE"
+    chmod 440 "$SUDOERS_FILE"
+    ok "Regra sudoers do botao de restart criada"
+else
+    ok "Regra sudoers ja presente"
+fi
+
+# -----------------------------------------------------------------------------
+echo ""
+echo "[7/10] Display/boot (HDMI sem monitor)"
+# -----------------------------------------------------------------------------
+BOOT_CONFIG="/boot/config.txt"
+[ -f "/boot/firmware/config.txt" ] && BOOT_CONFIG="/boot/firmware/config.txt"
+if [ -f "$BOOT_CONFIG" ]; then
+    # Backup UNICO (nao acumula a cada execucao)
+    [ -f "${BOOT_CONFIG}.mvision-backup" ] || cp "$BOOT_CONFIG" "${BOOT_CONFIG}.mvision-backup"
+    if ! grep -q "hdmi_force_hotplug=1" "$BOOT_CONFIG"; then
+        { echo ""; echo "# MVision: HDMI ativo mesmo sem monitor"; echo "hdmi_force_hotplug=1"; \
+          echo "hdmi_group=1"; echo "hdmi_mode=4"; } >> "$BOOT_CONFIG"
+        ok "HDMI hotplug configurado (efetivo apos reboot)"
     else
-        echo "  ✓ $(basename $model) OK ($(du -h "$model" | cut -f1))"
+        ok "HDMI hotplug ja configurado"
+    fi
+else
+    warn "config.txt nao encontrado (nao e Raspberry Pi?) - etapa de display pulada"
+fi
+
+# -----------------------------------------------------------------------------
+echo ""
+echo "[8/10] Permissoes e grupos"
+# -----------------------------------------------------------------------------
+for grp in gpio video i2c; do
+    if getent group "$grp" >/dev/null && ! id -nG "$SERVICE_USER" | grep -qw "$grp"; then
+        usermod -aG "$grp" "$SERVICE_USER" && ok "Usuario adicionado ao grupo $grp"
     fi
 done
+ok "Grupos verificados"
+# Apenas diretorios de escrita do runtime (nao o projeto inteiro a cada execucao)
+mkdir -p "$PROJECT_DIR/data/logs" "$PROJECT_DIR/data/alert_images" "$PROJECT_DIR/config"
+chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR/data" "$PROJECT_DIR/config"
+ok "Diretorios de runtime prontos (data/, config/)"
 
-# 2. Recarrega e habilita o serviço
-echo "[2/4] Habilitando serviço..."
-systemctl daemon-reload
-systemctl enable hospital-monitor
-echo "  Serviço habilitado para iniciar no boot"
+# -----------------------------------------------------------------------------
+echo ""
+echo "[9/10] Ferramentas (mvision-doctor, atualizador USB, firstboot)"
+# -----------------------------------------------------------------------------
+install -m 755 "$SCRIPT_DIR/mvision-doctor.sh" /usr/local/bin/mvision-doctor
+ok "mvision-doctor instalado (rode 'mvision-doctor' para diagnostico)"
+install -m 755 "$SCRIPT_DIR/usb-update.sh" /usr/local/bin/mvision-usb-update
+ok "Atualizador USB instalado"
+install -m 755 "$SCRIPT_DIR/firstboot.sh" /usr/local/bin/mvision-firstboot
+install_unit "$SCRIPT_DIR/mvision-firstboot.service" /etc/systemd/system/mvision-firstboot.service
+[ "$NEED_DAEMON_RELOAD" = 1 ] && systemctl daemon-reload
 
-# 3. Configura permissões
-echo "[3/4] Configurando permissões..."
-chown -R $SERVICE_USER:$SERVICE_GROUP "$PROJECT_DIR"
-chmod +x "$PROJECT_DIR/main.py"
+# -----------------------------------------------------------------------------
+echo ""
+echo "[10/10] Habilitando e iniciando servicos"
+# -----------------------------------------------------------------------------
+systemctl enable hospital-monitor mvision-web mvision-web-healthcheck.timer mvision-usb-update &>/dev/null
+ok "Servicos habilitados no boot"
 
-# Adiciona usuário aos grupos necessários
-usermod -aG gpio $SERVICE_USER 2>/dev/null || true
-usermod -aG video $SERVICE_USER 2>/dev/null || true
-echo "  Usuário $SERVICE_USER adicionado aos grupos gpio e video"
-
-# 4. Verifica arquivos importantes
-echo "[4/4] Verificando configuração..."
-if [ -f "$PROJECT_DIR/data/bed_reference.json" ]; then
-    echo "  ✓ Referência de cama encontrada"
-else
-    echo "  ! Referência de cama NÃO encontrada (será calibrada no primeiro uso)"
+if [ "$PREPARE_IMAGE" = 1 ]; then
+    echo ""
+    echo "=============================================================="
+    echo " PREPARANDO SD PARA IMAGEM DOURADA"
+    echo "=============================================================="
+    systemctl stop hospital-monitor mvision-web &>/dev/null
+    # Remove segredos/identidade que NAO podem ser clonados entre unidades
+    rm -f "$PROJECT_DIR/config/web_auth.json" \
+          "$PROJECT_DIR/config/environment.json" \
+          "$PROJECT_DIR/config/runtime_config.json" \
+          "$PROJECT_DIR/data/bed_reference.json"
+    rm -rf "$PROJECT_DIR/data/alert_images" "$PROJECT_DIR/data/logs"
+    journalctl --rotate &>/dev/null; journalctl --vacuum-time=1s &>/dev/null
+    systemctl enable mvision-firstboot &>/dev/null
+    ok "Segredos limpos e mvision-firstboot habilitado"
+    echo ""
+    echo "Desligue com 'sudo poweroff', remova o SD e extraia a imagem"
+    echo "(ver doc/IMAGEM_DOURADA.md). NAO ligue este SD antes de clonar."
+    exit 0
 fi
 
-if [ -f "$PROJECT_DIR/config/environment.json" ]; then
-    echo "  ✓ Configuração de ambiente encontrada"
-else
-    echo "  ! Configuração de ambiente NÃO encontrada"
-fi
+systemctl restart mvision-web
+systemctl restart hospital-monitor
+ok "Servicos (re)iniciados"
+
+# -----------------------------------------------------------------------------
+echo ""
+echo "=============================================================="
+echo " VERIFICACAO FINAL (mvision-doctor)"
+echo "=============================================================="
+sleep 8  # tempo para os servicos subirem
+/usr/local/bin/mvision-doctor --install-check
+DOCTOR_RC=$?
 
 echo ""
-echo "=============================================="
-echo "Instalação concluída!"
-echo "=============================================="
-echo ""
-echo "COMANDOS ÚTEIS:"
-echo ""
-echo "  Iniciar o serviço:"
-echo "    sudo systemctl start hospital-monitor"
-echo ""
-echo "  Parar o serviço:"
-echo "    sudo systemctl stop hospital-monitor"
-echo ""
-echo "  Ver status:"
-echo "    sudo systemctl status hospital-monitor"
-echo ""
-echo "  Ver logs em tempo real:"
-echo "    journalctl -u hospital-monitor -f"
-echo ""
-echo "  Após modificar o código, reinicie:"
-echo "    sudo systemctl restart hospital-monitor"
-echo ""
-echo "OPCIONAL - Configurar display virtual (para funcionar sem monitor):"
-echo "    sudo bash $SCRIPT_DIR/setup-display.sh"
-echo ""
-echo "O serviço iniciará automaticamente no próximo boot."
+echo "=============================================================="
+if [ "$ERRORS" -eq 0 ] && [ "$DOCTOR_RC" -eq 0 ]; then
+    echo -e " ${GREEN}INSTALACAO OK${NC} (avisos: $WARNINGS)"
+    IP_ADDR=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo ""
+    echo " Painel web:  http://${IP_ADDR:-<ip-do-dispositivo>}:8080"
+    echo " Senha padrao: mvision123 (o painel exigira a troca)"
+    echo " Diagnostico:  mvision-doctor"
+    exit 0
+else
+    echo -e " ${RED}INSTALACAO COM PROBLEMAS${NC} (erros: $ERRORS, verificacao: $DOCTOR_RC)"
+    echo " Revise as linhas [ERRO] acima e rode novamente: sudo bash deploy/install.sh"
+    exit 1
+fi

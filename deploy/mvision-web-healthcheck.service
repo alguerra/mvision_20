@@ -1,0 +1,8 @@
+[Unit]
+Description=MVision - Healthcheck do painel web (reinicia se travado)
+
+[Service]
+Type=oneshot
+# O unit mvision-web nao tem watchdog proprio (uvicorn); um deadlock deixa o
+# processo "active" sem responder. Este check cobre esse caso.
+ExecStart=/bin/bash -c 'curl -fs -m 10 http://localhost:8080/ -o /dev/null || systemctl restart mvision-web'

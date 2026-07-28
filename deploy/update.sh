@@ -1,46 +1,39 @@
 #!/bin/bash
 # =============================================================================
-# Script para aplicar atualizações do código
+# Script para aplicar atualizações do código (uso em laboratório)
 # =============================================================================
 #
-# USO (após modificar o código):
-#   cd /home/pi/mvision/deploy
-#   sudo bash update.sh
+# USO (após modificar/sincronizar o código):
+#   sudo bash deploy/update.sh
 #
 # O QUE FAZ:
-#   - Reinicia o serviço para aplicar as mudanças
-#   - Mostra os logs para verificar se iniciou corretamente
+#   - Reinicia AMBOS os serviços (monitor E painel web)
+#   - Roda o diagnóstico (mvision-doctor) para confirmar que tudo subiu
 #
+# Para atualização em campo SEM rede, use o pendrive (ver usb-update.sh).
 # =============================================================================
 
 echo "=============================================="
 echo "Aplicando atualizações..."
 echo "=============================================="
 
-# Verifica se está rodando como root
 if [ "$EUID" -ne 0 ]; then
-    echo "ERRO: Execute como root:"
-    echo "  sudo bash update.sh"
+    echo "ERRO: Execute como root: sudo bash update.sh"
     exit 1
 fi
 
-# Reinicia o serviço
 echo ""
-echo "Reiniciando serviço..."
+echo "Reiniciando serviços (monitor + painel web)..."
+systemctl restart mvision-web
 systemctl restart hospital-monitor
 
-# Aguarda um pouco
-sleep 3
+echo "Aguardando serviços subirem..."
+sleep 8
 
-# Mostra status
-echo ""
-echo "Status do serviço:"
-systemctl status hospital-monitor --no-pager
-
-echo ""
-echo "=============================================="
-echo "Atualização aplicada!"
-echo "=============================================="
-echo ""
-echo "Para ver os logs em tempo real:"
-echo "  journalctl -u hospital-monitor -f"
+if command -v mvision-doctor &>/dev/null; then
+    mvision-doctor
+else
+    systemctl status hospital-monitor --no-pager | head -5
+    systemctl status mvision-web --no-pager | head -5
+    echo "(mvision-doctor nao instalado - rode: sudo bash deploy/install.sh)"
+fi

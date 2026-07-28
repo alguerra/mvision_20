@@ -1,0 +1,9 @@
+[Unit]
+Description=MVision - Healthcheck periodico do painel web
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
