@@ -13,10 +13,6 @@ import numpy as np
 
 from config import (
     ALERT_PERSISTENT_SAFE_FRAMES,
-    BED_MARGIN_BOTTOM,
-    BED_MARGIN_LEFT,
-    BED_MARGIN_RIGHT,
-    BED_MARGIN_TOP,
     COMPANION_ANALYSIS_ENABLED,
     COMPANION_RISK_ENTER_BOOST,
     CONFIDENCE_EMA_ALPHA,
@@ -57,6 +53,7 @@ from config import (
     SITTING_MIN_ASPECT_RATIO,
     TORSO_RATIO_MIN_FOR_LYING,
 )
+from modules.bed_zone import containment as bed_containment, expand_bed_bbox, point_in_zone
 
 
 @dataclass
@@ -311,11 +308,10 @@ class PoseAnalyzer:
         point: Tuple[float, float],
     ) -> bool:
         """
-        Verifica se ponto esta dentro da area da cama com margens assimetricas.
+        Verifica se ponto esta dentro da zona expandida da cama.
 
-        Usa margens diferentes por lado para compensar a perspectiva da camera
-        overhead (~45 graus). A margem do topo eh maior porque a cabeca do
-        paciente sentado se projeta acima do bbox do colchao.
+        Delegado a modules/bed_zone (definicao UNICA da zona, compartilhada
+        com o desenho no monitor). Margens assimetricas em config BED_MARGIN_*.
 
         Args:
             point: Coordenadas (x, y) do ponto
@@ -323,18 +319,7 @@ class PoseAnalyzer:
         Returns:
             True se ponto esta dentro da zona expandida da cama
         """
-        x1, y1, x2, y2 = self.bed_bbox
-        bed_width = x2 - x1
-        bed_height = y2 - y1
-
-        # Margens assimetricas (y1=topo da imagem, y2=base)
-        x1_expanded = x1 - bed_width * BED_MARGIN_LEFT
-        x2_expanded = x2 + bed_width * BED_MARGIN_RIGHT
-        y1_expanded = y1 - bed_height * BED_MARGIN_TOP
-        y2_expanded = y2 + bed_height * BED_MARGIN_BOTTOM
-
-        px, py = point
-        return x1_expanded <= px <= x2_expanded and y1_expanded <= py <= y2_expanded
+        return point_in_zone(point, self.bed_bbox)
 
     def analyze_position(
         self,
@@ -545,20 +530,11 @@ class PoseAnalyzer:
                     analysis.is_lying = True
 
             # --- Contenção: fração do bbox da pessoa dentro da cama COM margens ---
+            # (mesma zona expandida de is_point_in_bed — modules/bed_zone)
             if p_area > 0:
-                bed_x1, bed_y1, bed_x2, bed_y2 = self.bed_bbox
-                bed_width = bed_x2 - bed_x1
-                bed_height = bed_y2 - bed_y1
-                exp_x1 = bed_x1 - bed_width * BED_MARGIN_LEFT
-                exp_x2 = bed_x2 + bed_width * BED_MARGIN_RIGHT
-                exp_y1 = bed_y1 - bed_height * BED_MARGIN_TOP
-                exp_y2 = bed_y2 + bed_height * BED_MARGIN_BOTTOM
-                ct_x1 = max(px1, exp_x1)
-                ct_y1 = max(py1, exp_y1)
-                ct_x2 = min(px2, exp_x2)
-                ct_y2 = min(py2, exp_y2)
-                ct_area = max(0, ct_x2 - ct_x1) * max(0, ct_y2 - ct_y1)
-                analysis.person_bed_containment = ct_area / p_area
+                analysis.person_bed_containment = bed_containment(
+                    (px1, py1, px2, py2), expand_bed_bbox(self.bed_bbox)
+                )
 
         # Calcula resumo
         analysis.points_inside = points_inside

@@ -91,6 +91,11 @@ ALERT_PERSISTENT_SAFE_FRAMES = 10        # Frames consecutivos de evidencia segu
 COMPANION_ANALYSIS_ENABLED = True        # False = comportamento legado (ACOMPANHADO cega a analise)
 COMPANION_RISK_ENTER_BOOST = 0.1         # Acrescimo ao threshold de RISCO com acompanhante (compensa erro de associacao)
 PATIENT_ASSOC_MAX_JUMP_RATIO = 0.25      # Salto maximo do centroide entre frames (fracao da diagonal do frame)
+# Contencao minima (bbox da pessoa dentro da cama CRUA) para uma deteccao ser
+# candidata a paciente quando ha 2+ pessoas. Propositalmente mais frouxa que
+# PERSON_BED_CONTAINMENT_MIN (0.4, cama expandida): aqui e ASSOCIACAO (qual
+# pessoa e o paciente), la e DECISAO de risco (a pessoa esta fora da cama?).
+PATIENT_ASSOC_MIN_CONTAINMENT = 0.15
 
 # Publicação de transições (anti-flapping)
 STATE_PUBLISH_DWELL_FRAMES = 3           # Frames que o estado candidato deve persistir antes de ser logado
@@ -129,7 +134,12 @@ YOLO_BED_MODEL = "yolov8l.pt"
 YOLO_ASETO_MODEL = "aseto_v3_best.pt"
 ASETO_BED_CLASS_NAMES = ["Hospital Bed"]
 ASETO_DETECTION_CONF = 0.05
-BED_DETECTION_SENSITIVITY = 5  # 1=rigoroso, 10=muito sensivel, 5=padrao
+# Slider 1-10 do painel. Multiplicador sobre as confiancas base abaixo:
+#   1 = 4.0x (rigoroso) | 5 = 1.0x (= valor base documentado) | 10 = 0.3x (piso)
+# Afeta APENAS a deteccao da cama (calibracao/recheck), nunca a logica de risco.
+# Mudar o slider e reiniciar forca nova calibracao (a referencia salva com
+# outra sensibilidade so e usada como fallback apos falhas).
+BED_DETECTION_SENSITIVITY = 5
 
 # Validacao cruzada da calibracao com o ASETO (fine-tuned para cama hospitalar).
 # O bbox encontrado pelo COCO so e aceito se sobrepoe uma deteccao do ASETO —
@@ -139,14 +149,15 @@ BED_DETECTION_SENSITIVITY = 5  # 1=rigoroso, 10=muito sensivel, 5=padrao
 ASETO_VALIDATION_ENABLED = True
 ASETO_VALIDATION_MIN_IOU = 0.25   # Generoso: bbox do ASETO V3 e impreciso
 
-# Estratégia 1 (primária): classes mais prováveis
-BED_CLASS_NAMES_PRIMARY = ["bed", "couch"]
-# Estratégia 2 (secundária): inclui bench (macas metálicas simples)
+# Classes COCO aceitas como cama (bench cobre macas metalicas simples)
 BED_CLASS_NAMES_SECONDARY = ["bed", "couch", "bench"]
 
-# Confiança mínima por estratégia
+# Confiança mínima (base, nivel 5) por estratégia — escada em ordem:
+#   coco_histEq (frame cru + histEq) -> coco_raw (frame cru)
+#   -> secondary (frame normalizado) -> exploratory (frame normalizado)
+# A antiga "primary" (bed/couch, 0.15) foi removida: era sempre mais rigida
+# que as estrategias anteriores e nunca acrescentava candidato.
 BED_DETECTION_CONF_COCO = 0.10       # Base para estrategias COCO histEq/raw
-BED_DETECTION_CONF_PRIMARY = 0.15
 BED_DETECTION_CONF_SECONDARY = 0.10
 BED_DETECTION_CONF_FALLBACK = 0.05   # Confiança minima para cameras IR/baixa luz
 
@@ -174,6 +185,18 @@ CALIBRATION_FRAMES = 10              # Quadros para calibração
 CALIBRATION_MAX_VARIANCE = 35        # Variação máxima em pixels para considerar estável
 CALIBRATION_SUCCESS_DISPLAY_SECONDS = 3  # Tempo para mostrar "Configuração concluída"
 CALIBRATION_MIN_DETECTION_RATE = 0.5  # Maioria dos frames (5/10) deve conter a cama
+# Calibracao de boot exige CAMA VAZIA (pessoa/cobertor distorcem a deteccao).
+# Com pessoa no quadro o sistema espera; se ja existe referencia salva valida
+# e a cama continua ocupada por mais que isto, usa a referencia salva (o leito
+# nao pode ficar sem cobertura com paciente presente).
+CALIBRATION_OCCUPIED_FALLBACK_SECONDS = 120
+
+# Recheck (a cada BED_RECHECK_INTERVAL_HOURS) so REFINA a referencia: exige
+# IoU minimo com a atual, variacao de area limitada e confianca nao inferior.
+# Divergencia grande = "cama possivelmente movida" (aviso, sem troca silenciosa).
+RECHECK_MIN_IOU = 0.5
+RECHECK_MOVED_IOU = 0.3               # Abaixo disto, avisa que a cama pode ter sido movida
+RECHECK_AREA_RATIO_RANGE = (0.8, 1.25)
 
 # Fallback por consistencia espacial
 # Quando calibracao padrao falha (poucas deteccoes), aceita cluster menor

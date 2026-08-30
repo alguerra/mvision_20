@@ -2,10 +2,13 @@
 Módulo de autodetecção da cama hospitalar.
 Utiliza YOLOv8 com detecção multi-estratégia e persiste coordenadas para re-uso.
 
-Estratégias de detecção (em ordem de prioridade):
-  1. Primary: classes "bed", "couch" com confiança >= 0.25
-  2. Secondary: classes "bed", "couch", "bench" com confiança >= 0.15
-  3. Exploratory: mesmas classes com confiança >= 0.10 (apenas diagnóstico, não retorna)
+Estratégias de detecção (em ordem de prioridade; classes bed/couch/bench,
+confianças base no nível 5 do slider — ver _apply_sensitivity):
+  1. coco_histEq: frame cru + equalização de histograma (melhor bbox em IR), conf 0.10
+  2. coco_raw:    frame cru sem pré-processamento, conf 0.10
+  3. secondary:   frame normalizado (gray-world + CLAHE), conf 0.10
+  4. exploratory: frame normalizado, conf 0.05 (câmeras IR/baixa luz)
+O ASETO (fine-tuned) atua apenas como validador cruzado do candidato.
 """
 
 import json
@@ -25,11 +28,9 @@ from config import (
     ASETO_VALIDATION_MIN_IOU,
     YOLO_ASETO_MODEL,
     BED_CLASS_NAMES,
-    BED_CLASS_NAMES_PRIMARY,
     BED_CLASS_NAMES_SECONDARY,
     BED_DETECTION_CONF_COCO,
     BED_DETECTION_CONF_FALLBACK,
-    BED_DETECTION_CONF_PRIMARY,
     BED_DETECTION_CONF_SECONDARY,
     BED_DETECTION_DIAGNOSTIC,
     BED_DETECTION_SENSITIVITY,
@@ -37,7 +38,9 @@ from config import (
     BED_MIN_AREA_RATIO,
     BED_RECHECK_INTERVAL_HOURS,
     BED_REFERENCE_PATH,
+    FLIP_HORIZONTAL,
 )
+from modules.bed_zone import bbox_touches_edges
 
 
 def preprocess_ir_for_aseto(frame: np.ndarray) -> np.ndarray:
@@ -75,6 +78,11 @@ class BedDetector:
         self.detected_strategy: Optional[str] = None
         self.detected_confidence: float = 0.0
         self.detected_score: float = 0.0
+        # Estrategia vencedora da ultima chamada a detect_bed_detailed
+        self._last_strategy_name: Optional[str] = None
+        # Proveniencia da referencia carregada (None = arquivo legado sem o campo)
+        self.reference_sensitivity: Optional[int] = None
+        self.reference_touches_edges: List[str] = []
 
         # Resolve nomes de classes para índices (legado, para recheck)
         self.bed_class_indices = self._resolve_class_names(BED_CLASS_NAMES) if yolo_model else []
@@ -153,12 +161,25 @@ class BedDetector:
         return indices
 
     @staticmethod
+    def sensitivity_multiplier(sensitivity: int) -> float:
+        """
+        Multiplicador do slider (1-10) sobre a confianca base.
+
+        Linear por partes: 1 -> 4.0x (rigoroso), 5 -> 1.0x (= confianca base
+        documentada em config.py), 10 -> 0.3x (piso do detector, necessario
+        em cameras IR). O mapeamento antigo dava 2.36x no nivel 5 (conf 0.236),
+        muito acima dos 0.03-0.14 observados em IR: um aparelho novo nao
+        calibrava ate alguem mover o slider para 10.
+        """
+        s = max(1, min(10, int(sensitivity)))
+        if s <= 5:
+            return 4.0 - (s - 1) * (3.0 / 4.0)
+        return 1.0 - (s - 5) * (0.7 / 5.0)
+
+    @staticmethod
     def _apply_sensitivity(base_conf: float) -> float:
-        sensitivity = max(1, min(10, BED_DETECTION_SENSITIVITY))
-        # Level 1 (rigoroso)=4x base, Level 10 (sensivel)=0.3x base
-        # COCO 0.10: range 0.40 (nivel 1) -> 0.03 (nivel 10)
-        multiplier = 4.0 - (sensitivity - 1) * 3.7 / 9.0
-        return max(0.01, min(0.50, base_conf * multiplier))
+        multiplier = BedDetector.sensitivity_multiplier(BED_DETECTION_SENSITIVITY)
+        return max(0.01, min(0.50, round(base_conf * multiplier, 4)))
 
     def _build_strategies(self) -> List[Dict]:
         """
@@ -199,18 +220,12 @@ class BedDetector:
                 "max_area_ratio": BED_MAX_AREA_RATIO,
             })
 
-        # Estratégia 2: Primary no frame normalizado (bed, couch)
-        primary_indices = self._resolve_class_names(BED_CLASS_NAMES_PRIMARY)
-        if primary_indices:
-            strategies.append({
-                "name": "primary",
-                "class_names": BED_CLASS_NAMES_PRIMARY,
-                "class_indices": primary_indices,
-                "conf": self._apply_sensitivity(BED_DETECTION_CONF_PRIMARY),
-                "returns_detection": True,
-            })
+        # (A antiga "primary" — bed/couch a 0.15 no frame normalizado — foi
+        # removida: sempre mais rigida que as COCO acima e com classes contidas
+        # na secondary, nunca acrescentava candidato; so custava uma inferencia
+        # de yolov8l por frame no RPi.)
 
-        # Estratégia 3: Secondary (bed, couch, bench)
+        # Estratégia 2: Secondary no frame normalizado (bed, couch, bench)
         secondary_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
         if secondary_indices:
             strategies.append({
@@ -221,7 +236,7 @@ class BedDetector:
                 "returns_detection": True,
             })
 
-        # Estratégia 4: Exploratory (conf baixa)
+        # Estratégia 3: Exploratory no frame normalizado (conf baixa)
         exploratory_indices = self._resolve_class_names(BED_CLASS_NAMES_SECONDARY)
         if exploratory_indices:
             strategies.append({
@@ -285,18 +300,14 @@ class BedDetector:
         center_distance = (dist_x + dist_y) / 2
         center_score = 1 - center_distance  # Invertido: mais perto do centro = maior score
 
-        # 3. Penalidade para camas cortadas nas bordas
-        edge_margin = 5  # pixels de margem para considerar "na borda"
+        # 3. Penalidade leve para camas cortadas nas bordas laterais/topo.
+        # A borda INFERIOR e isenta: na camera frontal a cama legitimamente
+        # toca a base do quadro, e a penalidade antiga (0.3 por borda) fazia
+        # uma deteccao espuria menor e "limpa" vencer a cama real.
         edge_penalty = 0.0
-
-        if x1 <= edge_margin:  # Cortada na esquerda
-            edge_penalty += 0.3
-        if y1 <= edge_margin:  # Cortada em cima
-            edge_penalty += 0.3
-        if x2 >= frame_width - edge_margin:  # Cortada na direita
-            edge_penalty += 0.3
-        if y2 >= frame_height - edge_margin:  # Cortada embaixo
-            edge_penalty += 0.3
+        for edge in bbox_touches_edges((x1, y1, x2, y2), (frame_width, frame_height)):
+            if edge != "bottom":
+                edge_penalty += 0.1
 
         # Score final: combinação ponderada
         final_score = (
@@ -314,8 +325,9 @@ class BedDetector:
         frame_width: int,
         model=None,
         max_area_ratio: float = BED_MAX_AREA_RATIO,
+        log_discards: bool = False,
     ) -> Optional[Tuple[Tuple[int, int, int, int], str, float, float]]:
-        """Filtra por área mínima e seleciona a melhor detecção."""
+        """Filtra por área mínima/máxima e seleciona a melhor detecção."""
         model = model or self.model
         frame_area = frame_height * frame_width
         best_score = -1
@@ -328,9 +340,17 @@ class BedDetector:
 
             det_area = (x2 - x1) * (y2 - y1)
             area_ratio = det_area / frame_area
+            # Descartes por area sao logados: antes um candidato >50% do frame
+            # (comum em camera frontal proxima) sumia sem rastro
             if area_ratio < BED_MIN_AREA_RATIO:
+                if log_discards:
+                    print(f"      descartado: area {area_ratio*100:.1f}% < "
+                          f"minimo {BED_MIN_AREA_RATIO*100:.0f}%")
                 continue
             if area_ratio > max_area_ratio:
+                if log_discards:
+                    print(f"      descartado: area {area_ratio*100:.1f}% > "
+                          f"maximo {max_area_ratio*100:.0f}%")
                 continue
 
             score = self._calculate_bed_score(
@@ -342,7 +362,7 @@ class BedDetector:
                 class_id = int(boxes.cls[i])
                 class_name = model.names[class_id]
                 best_result = (
-                    tuple(bbox.astype(int)),
+                    tuple(int(v) for v in bbox),
                     class_name,
                     confidence,
                     score,
@@ -538,7 +558,7 @@ class BedDetector:
                 max_area = strategy.get("max_area_ratio", BED_MAX_AREA_RATIO)
                 best = self._select_best_detection(
                     results[0].boxes, frame_height, frame_width,
-                    model=model, max_area_ratio=max_area,
+                    model=model, max_area_ratio=max_area, log_discards=do_log,
                 )
                 if best is not None:
                     bbox, class_name, confidence, score = best
@@ -559,8 +579,10 @@ class BedDetector:
                         print(f"    >>> Selecionada: {class_name} via estrategia "
                               f"'{strategy['name']}' (conf={confidence:.3f}, score={score:.3f})")
 
+                    self._last_strategy_name = strategy["name"]
                     return bbox, class_name, confidence, score
 
+        self._last_strategy_name = None
         return None
 
     def _accept_detection(
@@ -573,19 +595,33 @@ class BedDetector:
         """Aceita uma detecção como referência atual."""
         self.bed_bbox = bbox
         self.detected_class_name = class_name
-        self.detected_strategy = None
+        self.detected_strategy = self._last_strategy_name
         self.detected_confidence = confidence
         self.detected_score = score
         self.last_detection_time = time.time()
 
-    def save_reference(self, bbox: Tuple[int, int, int, int]) -> None:
+    def save_reference(
+        self,
+        bbox: Tuple[int, int, int, int],
+        frame_size: Optional[Tuple[int, int]] = None,
+    ) -> Dict:
         """
-        Persiste coordenadas da cama em arquivo JSON com metadados.
+        Persiste coordenadas da cama em arquivo JSON com metadados e proveniencia.
+
+        A proveniencia (resolucao, flip, sensibilidade) permite rejeitar uma
+        referencia de outro enquadramento/aparelho (ex: copiada do notebook
+        por FileZilla) e forcar recalibracao quando o slider mudou.
 
         Args:
             bbox: Tuple (x1, y1, x2, y2) com coordenadas.
+            frame_size: (largura, altura) do frame em que o bbox foi obtido.
+
+        Returns:
+            Dict gravado (util para log/painel).
         """
         self.reference_path.parent.mkdir(parents=True, exist_ok=True)
+
+        touches = bbox_touches_edges(bbox, frame_size) if frame_size else []
 
         # Converte numpy int64 para int nativo Python
         data = {
@@ -595,6 +631,10 @@ class BedDetector:
             "detected_strategy": self.detected_strategy,
             "confidence": float(self.detected_confidence),
             "score": float(self.detected_score),
+            "frame_size": [int(frame_size[0]), int(frame_size[1])] if frame_size else None,
+            "flip_horizontal": bool(FLIP_HORIZONTAL),
+            "sensitivity": int(BED_DETECTION_SENSITIVITY),
+            "touches_edges": touches,
         }
 
         from modules.atomic_io import atomic_write_json
@@ -602,13 +642,26 @@ class BedDetector:
 
         self.bed_bbox = bbox
         self.last_detection_time = data["timestamp"]
+        self.reference_sensitivity = data["sensitivity"]
+        self.reference_touches_edges = touches
+        return data
 
-    def load_reference(self) -> Optional[Tuple[int, int, int, int]]:
+    def load_reference(
+        self,
+        frame_size: Optional[Tuple[int, int]] = None,
+    ) -> Optional[Tuple[int, int, int, int]]:
         """
         Carrega coordenadas salvas do arquivo JSON.
 
+        Referencias com proveniencia incompativel (resolucao ou flip diferentes
+        do atual) sao rejeitadas com aviso — o bbox seria silenciosamente
+        errado. Arquivos legados sem esses campos continuam aceitos.
+
+        Args:
+            frame_size: (largura, altura) atual para validar a proveniencia.
+
         Returns:
-            Tuple com coordenadas ou None se arquivo não existir.
+            Tuple com coordenadas ou None se arquivo não existir/for invalido.
         """
         if not self.reference_path.exists():
             return None
@@ -617,16 +670,47 @@ class BedDetector:
             with open(self.reference_path, "r") as f:
                 data = json.load(f)
 
-            self.bed_bbox = tuple(data["bbox"])
+            bbox = tuple(int(v) for v in data["bbox"])
+            if len(bbox) != 4:
+                raise KeyError("bbox")
+
+            ref_size = data.get("frame_size")
+            if frame_size is not None and ref_size:
+                if list(ref_size) != [int(frame_size[0]), int(frame_size[1])]:
+                    print(f"[BedDetector] Referencia salva ignorada: resolucao "
+                          f"{ref_size} != atual {list(frame_size)}")
+                    return None
+
+            ref_flip = data.get("flip_horizontal")
+            if ref_flip is not None and bool(ref_flip) != bool(FLIP_HORIZONTAL):
+                print(f"[BedDetector] Referencia salva ignorada: flip_horizontal "
+                      f"{ref_flip} != atual {FLIP_HORIZONTAL}")
+                return None
+
+            self.bed_bbox = bbox
             self.last_detection_time = data.get("timestamp", time.time())
             self.detected_class_name = data.get("detected_class")
             self.detected_strategy = data.get("detected_strategy")
             self.detected_confidence = data.get("confidence", 0.0)
             self.detected_score = data.get("score", 0.0)
+            self.reference_sensitivity = data.get("sensitivity")
+            self.reference_touches_edges = list(data.get("touches_edges") or [])
             return self.bed_bbox
 
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
+
+    def reference_matches_sensitivity(self) -> bool:
+        """
+        True se a referencia carregada foi obtida com a sensibilidade atual.
+
+        Referencia legada (sem o campo) conta como compativel. Se o slider
+        mudou, a referencia nao deve ser usada como atalho para pular a
+        calibracao — so como fallback apos falhas.
+        """
+        if self.reference_sensitivity is None:
+            return True
+        return int(self.reference_sensitivity) == int(BED_DETECTION_SENSITIVITY)
 
     def needs_recheck(self) -> bool:
         """
@@ -644,50 +728,6 @@ class BedDetector:
     def postpone_recheck(self) -> None:
         """Adia proximo recheck atualizando timestamp para agora."""
         self.last_detection_time = time.time()
-
-    def is_bbox_consistent(
-        self,
-        new_bbox: Tuple[int, int, int, int],
-        min_iou: float = 0.3,
-    ) -> bool:
-        """
-        Verifica se novo bbox e consistente com o atual (IoU minimo).
-
-        Protege contra deteccoes espurias que substituiriam a
-        calibracao valida (ex: pessoa ou objeto detectado como cama).
-
-        Args:
-            new_bbox: Novo bbox candidato (x1, y1, x2, y2).
-            min_iou: IoU minimo para considerar consistente.
-
-        Returns:
-            True se bbox e consistente ou nao ha referencia anterior.
-        """
-        if self.bed_bbox is None:
-            return True
-
-        ax1, ay1, ax2, ay2 = self.bed_bbox
-        bx1, by1, bx2, by2 = new_bbox
-
-        # Calcula intersecao
-        ix1 = max(ax1, bx1)
-        iy1 = max(ay1, by1)
-        ix2 = min(ax2, bx2)
-        iy2 = min(ay2, by2)
-
-        if ix1 >= ix2 or iy1 >= iy2:
-            return False
-
-        intersection = (ix2 - ix1) * (iy2 - iy1)
-        area_a = (ax2 - ax1) * (ay2 - ay1)
-        area_b = (bx2 - bx1) * (by2 - by1)
-        union = area_a + area_b - intersection
-
-        if union <= 0:
-            return False
-
-        iou = intersection / union
-        return iou >= min_iou
 
     def get_bed_bbox(self) -> Optional[Tuple[int, int, int, int]]:
         """

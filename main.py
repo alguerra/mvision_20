@@ -47,16 +47,22 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 from ultralytics import YOLO
 
 from config import (
+    BED_DETECTION_SENSITIVITY,
     BED_STANDBY_RETRY_SECONDS,
     COMPANION_ANALYSIS_ENABLED,
     PATIENT_ASSOC_MAX_JUMP_RATIO,
+    PATIENT_ASSOC_MIN_CONTAINMENT,
     CALIBRATION_CONSISTENCY_MAX_DIST,
     CALIBRATION_CONSISTENCY_VARIANCE,
     CALIBRATION_FRAMES,
     CALIBRATION_MAX_VARIANCE,
     CALIBRATION_MIN_CONSISTENT,
     CALIBRATION_MIN_DETECTION_RATE,
+    CALIBRATION_OCCUPIED_FALLBACK_SECONDS,
     CALIBRATION_SUCCESS_DISPLAY_SECONDS,
+    RECHECK_AREA_RATIO_RANGE,
+    RECHECK_MIN_IOU,
+    RECHECK_MOVED_IOU,
     CAMERA_BACKEND,
     CAMERA_INDEX,
     DEV_MODE,
@@ -85,6 +91,7 @@ from config import (
 from gui.display import DisplayManager
 from modules.alert_logger import AlertLogger
 from modules.bed_detector import BedDetector
+from modules.bed_zone import bbox_touches_edges, containment as bed_containment
 from modules.camera import CameraBase, create_camera, get_platform_info, IS_LINUX, wait_for_display
 from modules.environment import get_environment_id
 from modules.gpio_alerts import GPIOAlertManager
@@ -143,6 +150,19 @@ def normalize_frame_for_ir(frame: np.ndarray) -> np.ndarray:
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     lab[:, :, 0] = clahe.apply(lab[:, :, 0])
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def prepare_bed_frames(frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Pre-processamento UNICO para deteccao de cama: (normalizado, cru).
+
+    Usado pela calibracao, pelo recheck e pelo teste offline
+    (test_bed_images.py) — os tres precisam ver exatamente a mesma imagem,
+    senao a referencia e o recheck sao comparados sobre distribuicoes
+    diferentes. `frame` ja deve estar com o flip aplicado.
+    """
+    raw_frame = frame.copy()
+    return normalize_frame_for_ir(frame), raw_frame
 
 
 def _needs_ir_normalization(frame: np.ndarray) -> bool:
@@ -382,15 +402,83 @@ def _calibrate_consistency(
     return None
 
 
+def _should_accept_recheck(
+    current_bbox: Tuple[int, int, int, int],
+    current_conf: float,
+    new_bbox: Tuple[int, int, int, int],
+    new_conf: float,
+) -> Tuple[bool, str]:
+    """
+    Decide se um recheck pode substituir a referencia da cama.
+
+    O recheck so REFINA a referencia: IoU alto, area parecida e confianca
+    nao inferior. O criterio antigo (IoU >= 0.3 e score >= score atual)
+    era um "ratchet": como o score cresce com a area, o bbox so podia
+    crescer ao longo dos dias (mesa de cabeceira abocanhada ficava para
+    sempre). Divergencia grande vira aviso de "cama possivelmente movida",
+    nunca troca silenciosa.
+
+    Returns:
+        (aceita, motivo) — motivo em {"refined", "moved", "low_iou",
+        "area_change", "lower_confidence"}.
+    """
+    iou = BedDetector._bbox_iou(current_bbox, new_bbox)
+    if iou < RECHECK_MOVED_IOU:
+        return False, "moved"
+    if iou < RECHECK_MIN_IOU:
+        return False, "low_iou"
+
+    def _area(b):
+        return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+    cur_area = _area(current_bbox)
+    if cur_area <= 0:
+        return True, "refined"
+    ratio = _area(new_bbox) / cur_area
+    lo, hi = RECHECK_AREA_RATIO_RANGE
+    if ratio < lo or ratio > hi:
+        return False, "area_change"
+    if new_conf < current_conf:
+        return False, "lower_confidence"
+    return True, "refined"
+
+
+def _count_people(yolo_pose, frame: np.ndarray) -> int:
+    """Conta pessoas no frame com o modelo de pose ja residente (1 inferencia)."""
+    if yolo_pose is None:
+        return 0
+    try:
+        results = yolo_pose.predict(
+            frame,
+            conf=YOLO_POSE_CONFIDENCE,
+            iou=YOLO_POSE_IOU,
+            imgsz=YOLO_POSE_IMGSZ,
+            max_det=YOLO_POSE_MAX_DET,
+            classes=[0],
+            verbose=False,
+        )
+    except Exception as e:
+        log_exception("Erro ao contar pessoas na calibracao", e)
+        return 0
+    if not results or results[0].boxes is None:
+        return 0
+    return len(results[0].boxes)
+
+
 def calibrate_bed(
     camera: CameraBase,
     bed_detector: BedDetector,
     display: DisplayManager,
     num_frames: int = CALIBRATION_FRAMES,
     max_variance: float = CALIBRATION_MAX_VARIANCE,
-) -> Optional[Tuple[int, int, int, int]]:
+    yolo_pose=None,
+) -> Tuple[Optional[Tuple[int, int, int, int]], str]:
     """
     Calibra posição da cama por múltiplos frames.
+
+    A calibracao exige CAMA VAZIA (diretriz de campo: pessoa/cobertor
+    distorcem a deteccao). Se `yolo_pose` for informado, um frame e checado
+    antes e, havendo pessoa, a calibracao nem comeca.
 
     Args:
         camera: Instancia de camera (multiplataforma).
@@ -398,11 +486,34 @@ def calibrate_bed(
         display: Gerenciador de display.
         num_frames: Número de frames para calibração.
         max_variance: Variação máxima permitida em pixels.
+        yolo_pose: Modelo de pose residente para checar ocupacao (opcional).
 
     Returns:
-        Tuple (x1, y1, x2, y2) com bbox médio se estável, None se instável.
+        (bbox, motivo): bbox (x1, y1, x2, y2) se estável, senão None.
+        motivo em {"ok", "occupied", "failed", "quit"}.
     """
     detections = []
+
+    # --- Gate de cama vazia (1 inferencia de pose) ---
+    if yolo_pose is not None:
+        ret, frame = camera.read()
+        if ret and frame is not None:
+            if FLIP_HORIZONTAL:
+                frame = cv2.flip(frame, 1)
+            people = _count_people(yolo_pose, frame)
+            if people > 0:
+                print(f"    Cama ocupada ({people} pessoa(s) no quadro) - "
+                      f"calibracao adiada ate a cama ficar vazia")
+                frame = display.draw_system_message(
+                    frame,
+                    "CAMA OCUPADA",
+                    "Aguardando cama vazia para calibrar...",
+                    color=(0, 165, 255),
+                )
+                key = display.render(frame)
+                if key == ord("q") or key == ord("Q"):
+                    return None, "quit"
+                return None, "occupied"
 
     for i in range(num_frames):
         try:
@@ -414,11 +525,8 @@ def calibrate_bed(
             if FLIP_HORIZONTAL:
                 frame = cv2.flip(frame, 1)
 
-            # Frame cru para ASETO (antes da normalização IR)
-            raw_frame = frame.copy()
-
-            # Normaliza frame para cameras IR (usado pelo COCO)
-            frame = normalize_frame_for_ir(frame)
+            # Mesmo pre-processamento do recheck e do teste offline
+            frame, raw_frame = prepare_bed_frames(frame)
 
             bbox = bed_detector.detect_bed(frame, raw_frame=raw_frame, diagnostic=True)
 
@@ -432,7 +540,7 @@ def calibrate_bed(
 
             # Permite sair durante calibração
             if key == ord("q") or key == ord("Q"):
-                return None
+                return None, "quit"
 
             # Heartbeat durante calibracao
             send_heartbeat()
@@ -445,26 +553,36 @@ def calibrate_bed(
 
     # --- Logica de aceitacao dual ---
     min_detections = int(num_frames * CALIBRATION_MIN_DETECTION_RATE)
+    result = None
 
     # Caminho A: calibracao padrao (requer min_detections, filtra via IQR)
     if len(detections) >= min_detections:
         print(f"    {len(detections)}/{num_frames} deteccoes - tentando calibracao padrao")
         result = _calibrate_standard(detections, num_frames, min_detections, max_variance)
-        if result is not None:
-            return result
 
     # Caminho B: fallback por consistencia espacial
-    if len(detections) >= CALIBRATION_MIN_CONSISTENT:
+    if result is None and len(detections) >= CALIBRATION_MIN_CONSISTENT:
         print(f"    {len(detections)}/{num_frames} deteccoes - tentando calibracao por consistencia")
         result = _calibrate_consistency(detections)
-        if result is not None:
-            return result
+
+    if result is not None:
+        strategy = bed_detector.detected_strategy or "?"
+        print(f"    Estrategia vencedora (ultimo frame aceito): {strategy}")
+        width, height = camera.get_resolution()
+        edges = bbox_touches_edges(result, (width, height))
+        if edges:
+            msg = (f"Cama encostada na(s) borda(s) do quadro: {', '.join(edges)} - "
+                   f"zona de queda fora do enquadramento; reposicione a camera "
+                   f"enquadrando a cama inteira com folga")
+            print(f"    AVISO: {msg}")
+            logger.warning(msg)
+        return result, "ok"
 
     # Ambos falharam
     print(f"    Calibracao falhou: {len(detections)}/{num_frames} deteccoes "
           f"(minimo padrao={min_detections}, minimo consistencia={CALIBRATION_MIN_CONSISTENT})")
     print(f"    Dica: verifique os logs de diagnostico acima para ver o que o YOLO detectou")
-    return None
+    return None, "failed"
 
 
 def _filter_overlapping_boxes(boxes_xyxy: np.ndarray, iou_threshold: float = 0.4) -> list:
@@ -565,12 +683,9 @@ def _select_patient_index(
 
     for i in keep:
         x1, y1, x2, y2 = boxes_xyxy[i]
-        area = max(1.0, (x2 - x1) * (y2 - y1))
 
-        ix1, iy1 = max(x1, bx1), max(y1, by1)
-        ix2, iy2 = min(x2, bx2), min(y2, by2)
-        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-        containment = inter / area
+        # Contencao na cama CRUA (associacao, nao decisao de risco)
+        containment = bed_containment((x1, y1, x2, y2), bed_bbox)
 
         cx = (x1 + x2) / 2.0
         cy = (y1 + y2) / 2.0
@@ -590,7 +705,7 @@ def _select_patient_index(
             best_containment = containment
 
     # Sem associacao minima com a cama, nao ha paciente identificavel
-    if best_idx is not None and best_containment < 0.15:
+    if best_idx is not None and best_containment < PATIENT_ASSOC_MIN_CONTAINMENT:
         return None
 
     return best_idx
@@ -865,26 +980,38 @@ def run_monitoring_loop(
                 send_heartbeat()
                 validate_model_file(YOLO_BED_MODEL)
                 bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
-                result = bed_detector.detect_bed_detailed(frame, raw_frame=raw_frame)
+                # SEMPRE o mesmo pre-processamento da calibracao (normalizado +
+                # cru), independente da normalizacao IR sob demanda do loop —
+                # senao referencia e recheck sao comparados sobre imagens diferentes
+                bed_frame, bed_raw = prepare_bed_frames(raw_frame)
+                result = bed_detector.detect_bed_detailed(bed_frame, raw_frame=bed_raw)
                 bed_detector.release_model()
                 send_heartbeat()
                 if result is not None:
                     new_bbox, class_name, confidence, score = result
-                    current_score = bed_detector.detected_score
-                    if (bed_detector.is_bbox_consistent(new_bbox) and
-                            score >= current_score):
+                    accept, reason = _should_accept_recheck(
+                        bed_bbox, bed_detector.detected_confidence, new_bbox, confidence
+                    )
+                    if accept:
                         bed_detector._accept_detection(new_bbox, class_name, confidence, score)
                         bed_bbox = new_bbox
-                        bed_detector.save_reference(bed_bbox)
+                        bed_detector.save_reference(bed_bbox, frame_size=(frame.shape[1], frame.shape[0]))
                         pose_analyzer.update_bed_bbox(bed_bbox)
                         monitor.update_bed_bbox(bed_bbox)
-                        logger.info(f"Cama re-detectada: {bed_bbox} (score={score:.3f})")
+                        logger.info(f"Cama re-detectada (refinada): {bed_bbox} "
+                                    f"(conf={confidence:.3f}, score={score:.3f})")
                     else:
                         bed_detector.postpone_recheck()
-                        if not bed_detector.is_bbox_consistent(new_bbox):
-                            logger.info(f"Recheck ignorado: bbox inconsistente (IoU baixo)")
+                        if reason == "moved":
+                            logger.warning(
+                                f"Cama possivelmente MOVIDA: recheck encontrou {new_bbox} "
+                                f"vs referencia {bed_bbox} (IoU < {RECHECK_MOVED_IOU}). "
+                                f"Referencia mantida - recalibrar com a cama vazia."
+                            )
                         else:
-                            logger.info(f"Recheck ignorado: score inferior ({score:.3f} < {current_score:.3f})")
+                            logger.info(f"Recheck ignorado ({reason}): {new_bbox} "
+                                        f"conf={confidence:.3f} vs referencia {bed_bbox} "
+                                        f"conf={bed_detector.detected_confidence:.3f}")
                 else:
                     bed_detector.postpone_recheck()
 
@@ -1113,15 +1240,30 @@ def main():
             print("\n[4/4] Calibrando sistema...")
             bed_bbox = None
 
+            frame_size = camera.get_resolution()
+
+            # Referencia salva: validada contra resolucao/flip atuais. Se foi
+            # obtida com outra sensibilidade (slider mudou), nao serve de
+            # atalho — so de fallback apos falhas (senao mudar o slider e
+            # reiniciar nao teria efeito nenhum).
+            saved_reference = bed_detector.load_reference(frame_size=frame_size)
+            if saved_reference and not bed_detector.reference_matches_sensitivity():
+                print(f"    Referencia salva obtida com sensibilidade "
+                      f"{bed_detector.reference_sensitivity} (atual: "
+                      f"{BED_DETECTION_SENSITIVITY}) - recalibrando")
+                logger.info("Sensibilidade alterada - referencia salva vira apenas fallback")
+                saved_reference_is_fallback_only = True
+            else:
+                saved_reference_is_fallback_only = False
+
             # Modo desenvolvimento: tenta usar referência salva primeiro
             if DEV_SKIP_BED_DETECTION:
                 print("    [DEV] Modo desenvolvimento ativo - buscando referencia salva")
-                saved_bbox = bed_detector.load_reference()
-                if saved_bbox:
-                    bed_bbox = saved_bbox
+                if saved_reference and not saved_reference_is_fallback_only:
+                    bed_bbox = saved_reference
                     print(f"    [DEV] Usando referencia salva: {bed_bbox}")
                 else:
-                    print("    [DEV] AVISO: Nenhuma referencia salva encontrada")
+                    print("    [DEV] AVISO: Nenhuma referencia salva utilizavel")
                     print("    [DEV] Iniciando calibracao automatica...")
                     # Continua para calibracao normal em vez de sair
 
@@ -1129,6 +1271,7 @@ def main():
             max_calibration_attempts = 3
             calibration_start_time = time.time()
             calibration_timeout = 300  # 5 minutos maximo para calibracao
+            occupied_since = None
             while bed_bbox is None:
                 send_heartbeat()
 
@@ -1139,15 +1282,42 @@ def main():
                     bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
                     send_heartbeat()
 
-                calibration_attempts += 1
                 elapsed = time.time() - calibration_start_time
-                print(f"    Calibracao automatica (tentativa {calibration_attempts}, {elapsed:.0f}s)...")
-                bed_bbox = calibrate_bed(camera, bed_detector, display)
+                print(f"    Calibracao automatica (tentativa {calibration_attempts + 1}, {elapsed:.0f}s)...")
+                bed_bbox, calib_reason = calibrate_bed(
+                    camera, bed_detector, display, yolo_pose=yolo_pose
+                )
+
+                if calib_reason == "quit":
+                    logger.info("Encerrado pelo usuario durante calibracao")
+                    safe_cleanup(camera, display, gpio_manager)
+                    return
+
+                if calib_reason == "occupied":
+                    # Cama ocupada nao conta como tentativa nem consome o
+                    # timeout: o sistema espera a cama esvaziar. Com referencia
+                    # salva valida e ocupacao prolongada, usa a referencia —
+                    # o leito nao pode ficar sem cobertura com paciente presente
+                    if occupied_since is None:
+                        occupied_since = time.time()
+                    occupied_for = time.time() - occupied_since
+                    if saved_reference and occupied_for >= CALIBRATION_OCCUPIED_FALLBACK_SECONDS:
+                        bed_bbox = saved_reference
+                        logger.warning(f"Cama ocupada ha {occupied_for:.0f}s - usando referencia "
+                                       f"salva {bed_bbox} (recheck recalibra com a cama vazia)")
+                        print(f"    Usando referencia salva (cama ocupada): {bed_bbox}")
+                        continue
+                    calibration_start_time = time.time()
+                    time.sleep(BED_STANDBY_RETRY_SECONDS)
+                    continue
+
+                occupied_since = None
+                calibration_attempts += 1
 
                 if bed_bbox:
-                    bed_detector.save_reference(bed_bbox)
+                    bed_detector.save_reference(bed_bbox, frame_size=frame_size)
                 elif calibration_attempts >= max_calibration_attempts:
-                    saved_bbox = bed_detector.load_reference()
+                    saved_bbox = saved_reference
                     if saved_bbox:
                         bed_bbox = saved_bbox
                         logger.warning(f"Calibracao falhou {max_calibration_attempts}x - usando referencia salva: {bed_bbox}")
@@ -1186,11 +1356,18 @@ def main():
                         frame = cv2.flip(frame, 1)
                     frame = normalize_frame_for_ir(frame)
                     frame = display.draw_bed_polygon(frame, bed_bbox)
+                    success_edges = bbox_touches_edges(bed_bbox, frame_size)
+                    if success_edges:
+                        success_msg = f"AVISO: cama na borda ({', '.join(success_edges)}) - reposicione a camera"
+                        success_color = (0, 165, 255)
+                    else:
+                        success_msg = "Iniciando monitoramento..."
+                        success_color = (0, 255, 0)
                     frame = display.draw_system_message(
                         frame,
                         "CONFIGURACAO CONCLUIDA",
-                        "Iniciando monitoramento...",
-                        color=(0, 255, 0),
+                        success_msg,
+                        color=success_color,
                     )
                     key = display.render(frame)
 

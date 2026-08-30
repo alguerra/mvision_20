@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 from config import DASHBOARD_WIDTH, WINDOW_NAME, POSE_CONFIDENCE_HIGH
+from modules.bed_zone import expand_bed_bbox, point_in_zone
 from modules.state_machine import PatientState, PatientPoseState, StateMachine
 from modules.camera import DisplayBase, DisplayOpenCV, create_display, IS_WINDOWS, IS_LINUX
 
@@ -53,6 +54,25 @@ class DisplayManager:
         # refletir isso e o loop principal pula as operacoes de desenho
         self.skip_rendering = self.headless
 
+    @staticmethod
+    def _draw_dashed_rect(
+        frame: np.ndarray,
+        pt1: Tuple[int, int],
+        pt2: Tuple[int, int],
+        color: Tuple[int, int, int],
+        thickness: int = 1,
+        dash: int = 8,
+    ) -> None:
+        """Retangulo tracejado (OpenCV nao tem nativo)."""
+        x1, y1 = pt1
+        x2, y2 = pt2
+        for x in range(x1, x2, dash * 2):
+            cv2.line(frame, (x, y1), (min(x + dash, x2), y1), color, thickness)
+            cv2.line(frame, (x, y2), (min(x + dash, x2), y2), color, thickness)
+        for y in range(y1, y2, dash * 2):
+            cv2.line(frame, (x1, y), (x1, min(y + dash, y2)), color, thickness)
+            cv2.line(frame, (x2, y), (x2, min(y + dash, y2)), color, thickness)
+
     def draw_bed_polygon(
         self,
         frame: np.ndarray,
@@ -73,7 +93,13 @@ class DisplayManager:
         color = color or self.COLOR_BED
         x1, y1, x2, y2 = [int(v) for v in bbox]
 
-        # Desenha retângulo com bordas arredondadas (simulado)
+        # Zona expandida (a que a FSM realmente usa) em tracejado fino, para
+        # o operador ver exatamente onde "dentro da cama" termina
+        fh, fw = frame.shape[:2]
+        ex1, ey1, ex2, ey2 = [int(v) for v in expand_bed_bbox(bbox, (fw, fh))]
+        self._draw_dashed_rect(frame, (ex1, ey1), (ex2, ey2), color, 1)
+
+        # Retângulo da cama calibrada
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
         # Label "CAMA"
@@ -556,18 +582,11 @@ class DisplayManager:
         COLOR_LOW_CONF = (128, 128, 128)  # Cinza para baixa confianca
 
         def is_in_bed(point):
+            # Mesma zona da FSM (modules/bed_zone) — antes o monitor usava
+            # margem fixa 0.1 e colorir "dentro" nao batia com a decisao real
             if point is None:
                 return None
-            x1, y1, x2, y2 = bed_bbox
-            px, py = point
-            margin = 0.1
-            bed_width = x2 - x1
-            bed_height = y2 - y1
-            x1_exp = x1 - bed_width * margin
-            x2_exp = x2 + bed_width * margin
-            y1_exp = y1 - bed_height * margin
-            y2_exp = y2 + bed_height * margin
-            return x1_exp <= px <= x2_exp and y1_exp <= py <= y2_exp
+            return point_in_zone(point, bed_bbox)
 
         def draw_point(point, conf, name):
             if point is None:

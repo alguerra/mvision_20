@@ -1,22 +1,25 @@
 """
 Teste de deteccao de cama sobre imagens estaticas.
-Simula o processo de calibracao usando imagens salvas em data/test_images/.
+Simula o processo de calibracao usando imagens salvas em teste_camera/
+(frames PUROS da camera, sem overlays do dashboard — screenshots do sistema
+confundem o YOLO).
 
-Uso: python test_bed_images.py
+Reproduz o MESMO pre-processamento da calibracao em producao
+(main.prepare_bed_frames: frame normalizado para o COCO + frame cru para
+histEq/raw/ASETO). Antes este script chamava detect_bed() sem raw_frame e
+sem normalizacao, e o resultado offline nao batia com o RPi.
+
+Uso: python test_bed_images.py [pasta_ou_imagens...]
 """
 
 import glob
+import os
 import sys
 
 import cv2
-import numpy as np
 
 from config import (
-    BED_MIN_AREA_RATIO,
-    BED_MAX_AREA_RATIO,
-    CALIBRATION_CONSISTENCY_MAX_DIST,
-    CALIBRATION_CONSISTENCY_VARIANCE,
-    CALIBRATION_FRAMES,
+    BED_DETECTION_SENSITIVITY,
     CALIBRATION_MAX_VARIANCE,
     CALIBRATION_MIN_CONSISTENT,
     CALIBRATION_MIN_DETECTION_RATE,
@@ -26,28 +29,44 @@ from config import (
 from ultralytics import YOLO
 
 from modules.bed_detector import BedDetector
+from modules.bed_zone import bbox_touches_edges
 
-from main import _calibrate_consistency, _calibrate_standard
+from main import _calibrate_consistency, _calibrate_standard, prepare_bed_frames
 
 IMAGE_DIR = "teste_camera"
+EXTENSIONS = ("*.jpg", "*.jpeg", "*.png")
+
+
+def _collect_images(args: list) -> list:
+    if not args:
+        args = [IMAGE_DIR]
+    images = []
+    for arg in args:
+        if os.path.isdir(arg):
+            for ext in EXTENSIONS:
+                images.extend(glob.glob(os.path.join(arg, ext)))
+        else:
+            images.append(arg)
+    # Ignora saidas de execucoes anteriores
+    images = [p for p in images if "_det" not in os.path.basename(p)
+              and "resultado" not in os.path.basename(p)]
+    return sorted(set(images))
 
 
 def main():
-    images = sorted(
-        glob.glob(f"{IMAGE_DIR}/*.jpg")
-        + glob.glob(f"{IMAGE_DIR}/*.png")
-        + glob.glob(f"{IMAGE_DIR}/*.jpeg")
-    )
+    images = _collect_images(sys.argv[1:])
 
     if not images:
         print(f"Nenhuma imagem encontrada em {IMAGE_DIR}/")
-        print("Coloque imagens .jpg/.png nessa pasta e rode novamente.")
+        print("Coloque frames .jpg/.png nessa pasta (ou passe caminhos) e rode novamente.")
         sys.exit(1)
 
     print("=" * 60)
     print("TESTE DE DETECCAO DE CAMA - IMAGENS ESTATICAS")
     print("=" * 60)
     print(f"Modelo: {YOLO_BED_MODEL}")
+    print(f"Sensibilidade: {BED_DETECTION_SENSITIVITY} "
+          f"(x{BedDetector.sensitivity_multiplier(BED_DETECTION_SENSITIVITY):.2f})")
     print(f"Imagens encontradas: {len(images)}")
     print(f"Flip horizontal: {FLIP_HORIZONTAL}")
     print()
@@ -56,6 +75,8 @@ def main():
     model = YOLO(YOLO_BED_MODEL)
     bed_detector = BedDetector(model)
     detections = []
+    strategies = []
+    frame_size = None
 
     for i, img_path in enumerate(images):
         frame = cv2.imread(img_path)
@@ -67,13 +88,17 @@ def main():
             frame = cv2.flip(frame, 1)
 
         h, w = frame.shape[:2]
+        frame_size = (w, h)
         print(f"\n--- [{i+1}/{len(images)}] {img_path} ({w}x{h}) ---")
 
-        bbox = bed_detector.detect_bed(frame, diagnostic=True)
+        # Mesmo caminho da calibracao em producao
+        norm_frame, raw_frame = prepare_bed_frames(frame)
+        bbox = bed_detector.detect_bed(norm_frame, raw_frame=raw_frame, diagnostic=True)
 
         if bbox:
             detections.append(bbox)
-            print(f"  >> Detectada: bbox={bbox}")
+            strategies.append(bed_detector.detected_strategy)
+            print(f"  >> Detectada: bbox={bbox} via '{bed_detector.detected_strategy}'")
         else:
             print(f"  >> Nenhuma cama detectada")
 
@@ -81,6 +106,9 @@ def main():
     print("RESULTADO DA CALIBRACAO")
     print("=" * 60)
     print(f"Deteccoes: {len(detections)}/{len(images)} imagens")
+    if strategies:
+        counts = {s: strategies.count(s) for s in set(strategies)}
+        print(f"Estrategias vencedoras: {counts}")
 
     if not detections:
         print("Nenhuma deteccao - calibracao impossivel.")
@@ -117,6 +145,11 @@ def main():
         path_used = "PADRAO" if result_a is not None else "CONSISTENCIA"
         print(f"  Calibracao ACEITA via caminho {path_used}")
         print(f"  BBox final: {result}")
+        if frame_size:
+            edges = bbox_touches_edges(result, frame_size)
+            if edges:
+                print(f"  AVISO: cama encostada na(s) borda(s): {', '.join(edges)} "
+                      f"- zona de queda fora do enquadramento")
     else:
         print("  Calibracao FALHOU em ambos os caminhos")
         print("  Verifique os logs acima para diagnostico")
@@ -131,7 +164,8 @@ def main():
             cv2.rectangle(last_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(last_frame, "BED", (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            out_path = f"{IMAGE_DIR}/resultado_calibracao.jpg"
+            out_dir = os.path.dirname(images[-1]) or "."
+            out_path = os.path.join(out_dir, "resultado_calibracao.jpg")
             cv2.imwrite(out_path, last_frame)
             print(f"\n  Imagem com bbox salva em: {out_path}")
 

@@ -13,7 +13,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import _filter_overlapping_boxes, _needs_ir_normalization, _select_patient_index
+from main import (
+    _filter_overlapping_boxes,
+    _needs_ir_normalization,
+    _select_patient_index,
+    _should_accept_recheck,
+)
 from modules.bed_detector import BedDetector
 
 FRAME_SHAPE = (480, 640, 3)
@@ -118,6 +123,48 @@ class TestAsetoValidation(unittest.TestCase):
         # None = ASETO indisponivel; [] = ASETO rodou e nao viu nada
         self.assertTrue(self.detector._candidate_validated_by_aseto(candidate, None))
         self.assertTrue(self.detector._candidate_validated_by_aseto(candidate, []))
+
+
+class TestRecheckAcceptance(unittest.TestCase):
+    """Recheck so refina a referencia; nunca ratchet nem troca silenciosa."""
+
+    CURRENT = (200, 250, 600, 470)
+
+    def test_small_refinement_accepted(self):
+        accept, reason = _should_accept_recheck(self.CURRENT, 0.10, (205, 245, 605, 468), 0.12)
+        self.assertTrue(accept)
+        self.assertEqual(reason, "refined")
+
+    def test_growth_beyond_25pct_rejected(self):
+        # Mesma posicao, mas abocanhou a mesa de cabeceira (+40% de area).
+        # Com o criterio antigo (score cresce com a area) isto seria aceito.
+        bigger = (200, 250, 760, 470)
+        accept, reason = _should_accept_recheck(self.CURRENT, 0.10, bigger, 0.30)
+        self.assertFalse(accept)
+        self.assertEqual(reason, "area_change")
+
+    def test_shrink_within_range_accepted(self):
+        smaller = (210, 260, 590, 460)  # ~-14% de area
+        accept, reason = _should_accept_recheck(self.CURRENT, 0.10, smaller, 0.10)
+        self.assertTrue(accept)
+
+    def test_lower_confidence_rejected(self):
+        accept, reason = _should_accept_recheck(self.CURRENT, 0.20, (202, 252, 602, 472), 0.10)
+        self.assertFalse(accept)
+        self.assertEqual(reason, "lower_confidence")
+
+    def test_moved_bed_flagged_not_replaced(self):
+        moved = (20, 100, 300, 300)
+        accept, reason = _should_accept_recheck(self.CURRENT, 0.10, moved, 0.50)
+        self.assertFalse(accept)
+        self.assertEqual(reason, "moved")
+
+    def test_partial_overlap_rejected_as_low_iou(self):
+        # Deslocada 180 px: IoU ~0.38, entre 0.3 e 0.5 — nem "movida" nem refinamento
+        shifted = (380, 250, 780, 470)
+        accept, reason = _should_accept_recheck(self.CURRENT, 0.10, shifted, 0.50)
+        self.assertFalse(accept)
+        self.assertEqual(reason, "low_iou")
 
 
 if __name__ == "__main__":
