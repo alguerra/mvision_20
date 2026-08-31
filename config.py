@@ -87,6 +87,11 @@ FRAMES_TO_LOSE_PATIENT = 15              # Frames sem pessoa para considerar pac
 OCCLUSION_EMPTY_TIMEOUT_FRAMES = 300     # Frames em oclusao presumida na cama antes de assumir cama vazia (~60s)
 ALERT_PERSISTENT_SAFE_FRAMES = 10        # Frames consecutivos de evidencia segura para sair de ALERTA_PERSISTENTE
 
+# Anonimizacao visual: circulo solido sobre rosto/cabeca de toda pessoa
+# exibida (monitor, painel e imagens de alerta) — ninguem e identificavel
+# nas imagens renderizadas. Nao afeta a inferencia.
+PRIVACY_FACE_MASK_ENABLED = True
+
 # Análise com acompanhante presente (associação pessoa-paciente por geometria)
 COMPANION_ANALYSIS_ENABLED = True        # False = comportamento legado (ACOMPANHADO cega a analise)
 COMPANION_RISK_ENTER_BOOST = 0.1         # Acrescimo ao threshold de RISCO com acompanhante (compensa erro de associacao)

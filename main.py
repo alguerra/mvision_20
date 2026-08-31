@@ -52,6 +52,7 @@ from config import (
     COMPANION_ANALYSIS_ENABLED,
     PATIENT_ASSOC_MAX_JUMP_RATIO,
     PATIENT_ASSOC_MIN_CONTAINMENT,
+    PRIVACY_FACE_MASK_ENABLED,
     CALIBRATION_CONSISTENCY_MAX_DIST,
     CALIBRATION_CONSISTENCY_VARIANCE,
     CALIBRATION_FRAMES,
@@ -97,6 +98,7 @@ from modules.environment import get_environment_id
 from modules.gpio_alerts import GPIOAlertManager
 from modules.patient_monitor import PatientMonitor
 from modules.pose_analyzer import BodyPoints, PoseAnalyzer, PoseStateMachineEMA, PositionAnalysis
+from modules.privacy import apply_face_privacy
 from modules.state_machine import PatientPoseState, SystemState
 
 
@@ -1031,6 +1033,9 @@ def run_monitoring_loop(
             analysis = None
             person_count = 0
             person_bbox = None
+            keypoints_data = None
+            boxes = None
+            keep = []
 
             # Verifica se detectou pessoa com keypoints
             if len(results) > 0 and results[0].keypoints is not None:
@@ -1117,6 +1122,27 @@ def run_monitoring_loop(
 
                 if body_points:
                     frame = display.draw_keypoints(frame, body_points, pose_state_enum, bed_bbox)
+
+                # Anonimizacao: circulo solido sobre rosto/cabeca de TODAS as
+                # pessoas exibidas (paciente e acompanhantes), DEPOIS dos
+                # keypoints para cobrir tambem os marcadores da cabeca. Vale
+                # para o monitor, o painel e as imagens de alerta salvas.
+                if PRIVACY_FACE_MASK_ENABLED and keypoints_data is not None and keep:
+                    persons = []
+                    for i in keep:
+                        kp_xy = keypoints_data.xy[i].cpu().numpy()
+                        kp_conf = (
+                            keypoints_data.conf[i].cpu().numpy()
+                            if keypoints_data.conf is not None and len(keypoints_data.conf) > i
+                            else None
+                        )
+                        p_bbox = (
+                            boxes.xyxy[i].cpu().numpy()
+                            if boxes is not None and len(boxes) > i
+                            else None
+                        )
+                        persons.append((kp_xy, kp_conf, p_bbox))
+                    frame = apply_face_privacy(frame, persons)
 
                 frame = display.draw_pose_state_message(frame, pose_state_enum)
 
