@@ -37,16 +37,13 @@ O instalador cuida de: dependências, serviços, journald 200M, watchdog de hard
 
 ## 3. Hardening da imagem (uma vez, antes de extrair)
 
-1. **Overlayroot (raiz somente-leitura)** — proteção contra corrupção por corte de energia:
-   ```bash
-   sudo apt install -y overlayroot
-   ```
-   - Mover `data/` e `config/` para partição gravável dedicada (ex.: 3ª partição `mvision-data` montada em `/mvision-data`) e criar symlinks `/mvision/data` e `/mvision/config` apontando para lá.
-   - Ativar: em `/etc/overlayroot.conf` → `overlayroot="tmpfs"`.
-   - Manutenção futura: `sudo overlayroot-chroot`.
-   - **Revalidar o cenário V9 (cortes de energia) com o overlay ativo.**
+1. **Proteção do SD (overlay + partição de dados)** — agora automatizada pelo `mvision-overlay` (instalado pelo instalador). **No SD master, deixe a proteção DESATIVADA** — a imagem deve ser selada sem overlay; quem ativa é o firstboot de cada unidade clonada, controlado pelo `mvision-firstboot.conf` que o `--prepare-image` grava na partição de boot:
+   - `ENABLE_OVERLAY=0` (default): unidades clonadas ficam sem proteção; ativa-se depois por unidade com `sudo mvision-overlay --prepare-data && sudo mvision-overlay --migrate && sudo mvision-overlay --enable`.
+   - `ENABLE_OVERLAY=1`: o firstboot reserva a partição de dados (`DATA_SIZE_GB`, default 4), migra `data/`+`config/` e liga o overlay sozinho.
+   - **Só mude para 1 depois de revalidar o cenário V9 (cortes de energia) com o overlay ativo.**
+   - Estado/diagnóstico: `sudo mvision-overlay --status` e a seção "Protecao do SD card" do `mvision-doctor`.
 2. **RTC DS3231** (se o hardware do kit incluir): habilitar I2C (`raspi-config`), `dtoverlay=i2c-rtc,ds3231` no `config.txt`, desabilitar `fake-hwclock`.
-3. Conferir `sudo mvision-doctor` → **SISTEMA OPERANTE** (a falha de "referência de cama" é esperada — a calibração é por leito).
+3. Conferir `sudo mvision-doctor` → **SISTEMA OPERANTE** (a falha de "referência de cama" é esperada — a calibração é por leito; o aviso "Protecao do SD inativa" é esperado no master).
 
 ## 4. Selar e extrair a imagem
 
@@ -62,12 +59,12 @@ Isso **limpa os segredos e identidades** que não podem ser clonados (senha web,
    sudo dd if=/dev/sdX of=mvision-vX.Y.img bs=4M status=progress
    sudo pishrink.sh -z mvision-vX.Y.img    # https://github.com/Drewsif/PiShrink
    ```
-3. Guardar `mvision-vX.Y.img.gz` com a versão do git anotada (`git log -1 --format=%h`).
+3. Guardar `mvision-vX.Y.img.gz` com a versão anotada — atualize o arquivo `VERSION` na raiz do projeto **antes** de copiar o código: é ele que o instalador grava em `/etc/mvision-version` e o `mvision-doctor` exibe como "Versão instalada" (junto com um hash do conteúdo do código, já que o dispositivo não tem git).
 
 ## 5. Produzir unidades
 
 - Gravar `mvision-vX.Y.img.gz` em cada SD com o Raspberry Pi Imager ("Use custom image").
-- No **primeiro boot** de cada unidade, o `mvision-firstboot` roda sozinho: expande o filesystem, regenera `machine-id` e chaves SSH, limpa segredos e reinicia. Depois disso o aparelho está pronto para o checklist do técnico.
+- No **primeiro boot** de cada unidade, o `mvision-firstboot` roda sozinho: expande o filesystem **reservando a partição de dados persistente**, migra `data/`+`config/` para ela, regenera `machine-id` e chaves SSH, limpa segredos, ativa a proteção do SD (se `ENABLE_OVERLAY=1`) e reinicia. Depois disso o aparelho está pronto para o checklist do técnico.
 
 ## 6. Atualizações de campo (sem rede)
 
@@ -79,7 +76,7 @@ tar czf mvision-update-vX.Y.tar.gz --exclude-vcs --exclude=data .
 sha256sum mvision-update-vX.Y.tar.gz > mvision-update-vX.Y.tar.gz.sha256
 ```
 
-Copiar os DOIS arquivos para a raiz de um pendrive (FAT32). Em campo: desligar → espetar → ligar. O `mvision-usb-update` valida o checksum, faz backup do código atual, aplica, roda o instalador e registra em `/var/log/mvision-usb-update.log`. Pendrive esquecido no aparelho não re-aplica (controle de versão aplicada em `/var/lib/mvision-updates/`).
+Copiar os DOIS arquivos para a raiz de um pendrive (FAT32). Em campo: desligar → espetar → ligar. O `mvision-usb-update` valida o checksum, faz backup do código atual, aplica, roda o instalador e registra em `/var/log/mvision-usb-update.log`. Pendrive esquecido no aparelho não re-aplica (controle de versão aplicada em `/var/lib/mvision-updates/`). Se a proteção do SD estiver ativa, o atualizador desativa o overlay, aplica no boot seguinte e reativa sozinho — o processo total leva 2 reboots a mais.
 
 ## Notas
 

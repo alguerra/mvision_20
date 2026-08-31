@@ -82,7 +82,7 @@ for model in yolov8n-pose.pt yolov8l.pt; do
     if [ ! -f "$f" ]; then
         failc "$model ausente"
     elif head -c 24 "$f" | grep -q "version https"; then
-        failc "$model e ponteiro Git LFS (rode: git lfs pull com internet)"
+        failc "$model e ponteiro Git LFS - copie o .pt verdadeiro via FileZilla/SFTP ou pendrive (o dispositivo nao usa git)"
     else
         pass "$model valido ($(du -h "$f" | cut -f1))"
     fi
@@ -152,9 +152,42 @@ else
     warnc "Relogio IMplausivel ($(date '+%Y-%m-%d')) - logs terao data errada (instalar RTC)"
 fi
 
-grep -q "RuntimeWatchdogSec" /etc/systemd/system.conf.d/mvision-watchdog.conf 2>/dev/null \
-    && pass "Watchdog de hardware configurado" \
-    || warnc "Watchdog de hardware nao configurado (rode o instalador + reboot)"
+# Watchdog de hardware: nao basta o arquivo de config existir - verifica que
+# o dispositivo do chip existe E que o systemd de fato o armou neste boot.
+if ! grep -q "RuntimeWatchdogSec" /etc/systemd/system.conf.d/mvision-watchdog.conf 2>/dev/null; then
+    warnc "Watchdog de hardware nao configurado (rode o instalador + reboot)"
+elif [ ! -e /dev/watchdog ]; then
+    failc "Watchdog de hardware SEM DISPOSITIVO (/dev/watchdog ausente) - confira 'dtparam=watchdog=on' no config.txt e reinicie"
+else
+    WD_USEC=$(systemctl show -p RuntimeWatchdogUSec --value 2>/dev/null)
+    if [ -n "$WD_USEC" ] && [ "$WD_USEC" != "0" ] && [ "$WD_USEC" != "infinity" ]; then
+        pass "Watchdog de hardware ATIVO (systemd alimentando a cada $WD_USEC)"
+    else
+        failc "Watchdog de hardware configurado mas NAO armado pelo systemd (reboot pendente?)"
+    fi
+fi
+
+echo ""
+echo "--- Protecao do SD card ---"
+if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = "overlay" ]; then
+    pass "Overlay ativo (raiz somente-leitura - SD protegido contra queda de energia)"
+    # Com overlay ativo, dados fora da particao persistente sao PERDIDOS no reboot
+    if findmnt -no TARGET /mvision-data &>/dev/null; then
+        pass "Particao de dados montada em /mvision-data ($(df -h /mvision-data | awk 'NR==2 {print $4}') livres)"
+    else
+        failc "Overlay ativo SEM particao de dados montada - calibracao/alertas estao indo para a RAM e serao PERDIDOS no reboot"
+    fi
+    for d in data config; do
+        [ -L "$PROJECT_DIR/$d" ] \
+            && pass "$d/ persistente (symlink para a particao de dados)" \
+            || failc "$PROJECT_DIR/$d NAO migrado - conteudo sera PERDIDO no reboot (rode mvision-overlay --migrate)"
+    done
+else
+    warnc "Protecao do SD inativa (overlay desligado) - ative com mvision-overlay (ver INSTALACAO.md)"
+fi
+
+echo ""
+echo "--- Sistema (cont.) ---"
 
 grep -q "SystemMaxUse" /etc/systemd/journald.conf.d/mvision.conf 2>/dev/null \
     && pass "Limite do journald configurado" \
@@ -170,8 +203,16 @@ else
     failc "Painel web NAO responde na porta 8080"
 fi
 
-VERSION=$(cd "$PROJECT_DIR" 2>/dev/null && git log -1 --format="%h %ad" --date=short 2>/dev/null)
-[ -n "$VERSION" ] && echo "         Versao instalada: $VERSION"
+# Versao instalada: o dispositivo nao tem git - a identidade vem do
+# /etc/mvision-version gravado pelo instalador (release + hash do codigo)
+if [ -f /etc/mvision-version ]; then
+    REL=$(grep -oP '^release=\K.*' /etc/mvision-version)
+    HASH=$(grep -oP '^code_hash=\K.*' /etc/mvision-version)
+    DATE=$(grep -oP '^installed_at=\K.*' /etc/mvision-version)
+    pass "Versao instalada: ${REL:-?} (codigo $HASH, instalado em $DATE)"
+else
+    warnc "Versao instalada desconhecida (/etc/mvision-version ausente - rode o instalador)"
+fi
 
 echo ""
 echo "=============================================================="

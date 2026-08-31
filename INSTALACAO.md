@@ -24,7 +24,7 @@ Roteiro único e completo. Seguindo as etapas na ordem, ao final você terá o s
 1. Insira o SD no computador e abra o **Raspberry Pi Imager**.
 2. Selecione:
    - **Dispositivo:** Raspberry Pi 5
-   - **Sistema:** Raspberry Pi OS (**64-bit**) — versão **Desktop**
+   - **Sistema:** Raspberry Pi OS (**64-bit**) — versão **Desktop**, base **Bookworm** (o instalador recusa versões mais antigas)
    - **Armazenamento:** seu cartão SD
 3. Clique em **Editar configurações** (engrenagem) e defina:
    - Hostname: `mvision`
@@ -165,6 +165,21 @@ Peça a alguém para simular o paciente e observe o estado no painel/monitor:
 
 ---
 
+## Etapa 8b (recomendado para produção) — Proteção do SD card
+
+Quedas de energia corrompem cartões SD com o tempo. A proteção deixa a raiz do sistema **somente-leitura** (overlay em RAM) e move o que precisa persistir (calibração, configuração, alertas) para uma partição de dados dedicada:
+
+```bash
+sudo mvision-overlay --prepare-data   # cria a particao de dados (precisa de espaco livre apos a raiz)
+sudo mvision-overlay --migrate        # move data/ e config/ para a particao
+sudo mvision-overlay --enable         # liga a protecao
+sudo reboot
+```
+
+**✔ Ponto de verificação:** `mvision-doctor` → `[PASS] Overlay ativo` e `[PASS] Particao de dados montada`.
+
+> **Importante:** com a proteção ativa, qualquer mudança de código/sistema exige desativar antes (`sudo mvision-overlay --disable && sudo reboot`), aplicar, e reativar. A **atualização por pendrive faz esse ciclo sozinha**. Num SD onde a raiz já ocupa o disco inteiro (instalação manual antiga), o `--prepare-data` avisará que não há espaço — nesse caso use o fluxo da imagem dourada, cujo firstboot reserva o espaço automaticamente.
+
 ## Etapa 9 (produção em escala) — Selar a imagem dourada
 
 Para instalar em vários leitos sem repetir tudo isso, transforme este SD em imagem master:
@@ -174,9 +189,11 @@ sudo bash /mvision/deploy/install.sh --prepare-image   # limpa segredos e identi
 sudo poweroff                                          # NAO religue este SD antes de clonar
 ```
 
-No PC de laboratório: extraia (`dd`) e comprima (`pishrink`) a imagem. Cada SD gravado com ela se auto-provisiona no primeiro boot (expande o disco, regenera identidade, reinicia) — o técnico em campo só segue o `doc/CHECKLIST_TECNICO.md` (1 página, sem terminal): ligar, trocar senha, identificar o leito e calibrar. Detalhes: `doc/IMAGEM_DOURADA.md`.
+No PC de laboratório: extraia (`dd`) e comprima (`pishrink`) a imagem. Cada SD gravado com ela se auto-provisiona no primeiro boot (expande o disco **reservando a partição de dados persistente**, regenera identidade, reinicia) — o técnico em campo só segue o `doc/CHECKLIST_TECNICO.md` (1 página, sem terminal): ligar, trocar senha, identificar o leito e calibrar.
 
-> Antes de produzir a imagem de hospital, aplique também o **overlayroot** (raiz somente-leitura — proteção contra corte de energia) e o **RTC**, conforme `doc/IMAGEM_DOURADA.md` §3.
+O `--prepare-image` grava um `mvision-firstboot.conf` na partição de boot com `ENABLE_OVERLAY=0`. Depois que o teste de queda de energia (V9) for revalidado com a proteção ativa, mude para `ENABLE_OVERLAY=1` **antes de selar** — cada unidade clonada então ativa a proteção do SD sozinha no primeiro boot. Detalhes: `doc/IMAGEM_DOURADA.md`.
+
+> O **RTC** (DS3231) continua manual — conforme `doc/IMAGEM_DOURADA.md` §3.
 
 ---
 
@@ -194,7 +211,7 @@ Copie os **dois arquivos** para a raiz de um pendrive (FAT32). No leito:
 
 **desligar da tomada → espetar o pendrive → ligar → aguardar o painel voltar (~5 min) → remover o pendrive.**
 
-O sistema valida o checksum, faz backup, aplica e reinicia sozinho (log em `/var/log/mvision-usb-update.log`). Pendrive esquecido não re-aplica a mesma versão.
+O sistema valida o checksum, faz backup, aplica e reinicia sozinho (log em `/var/log/mvision-usb-update.log`). Pendrive esquecido não re-aplica a mesma versão. Se a proteção do SD (overlay) estiver ativa, o atualizador **desativa, aplica e reativa sozinho** — isso adiciona dois reboots ao processo (~10 min no total).
 
 ### Em bancada, copiando do notebook (sem git no dispositivo)
 

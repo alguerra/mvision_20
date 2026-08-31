@@ -59,6 +59,35 @@ if [ "$EUID" -ne 0 ]; then
 fi
 [ -f "$PROJECT_DIR/main.py" ] && ok "main.py encontrado" || { fail "main.py nao encontrado em $PROJECT_DIR"; exit 1; }
 
+# Sistema operacional suportado: Raspberry Pi OS Bookworm (ou mais novo).
+# Em versoes antigas o pip (--break-system-packages) e os caminhos de boot
+# divergem e o instalador falharia com erros confusos la na frente.
+OS_CODENAME=$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-desconhecido}")
+case "$OS_CODENAME" in
+    bookworm) ok "Sistema operacional: Bookworm (suportado)" ;;
+    trixie)   warn "Sistema operacional: Trixie - mais novo que o validado (Bookworm); prossiga com atencao" ;;
+    *)
+        if [ "${MVISION_SKIP_OS_CHECK:-0}" = "1" ]; then
+            warn "SO '$OS_CODENAME' nao suportado - prosseguindo por MVISION_SKIP_OS_CHECK=1"
+        else
+            echo -e "${RED}Este instalador requer Raspberry Pi OS BOOKWORM (detectado: $OS_CODENAME).${NC}"
+            echo "Grave o SD com Raspberry Pi OS Bookworm 64-bit e rode novamente."
+            echo "(Para forcar em outro sistema: MVISION_SKIP_OS_CHECK=1 sudo -E bash deploy/install.sh)"
+            exit 1
+        fi
+        ;;
+esac
+PY_VER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+ok "Python detectado: ${PY_VER:-ausente} (Bookworm usa 3.11)"
+
+# Com o overlay de protecao do SD ativo, TUDO que este instalador escreve
+# (units, /etc, pacotes) iria para a RAM e sumiria no proximo reboot.
+if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = "overlay" ]; then
+    echo -e "${RED}Protecao do SD (overlay) esta ATIVA - a instalacao nao persistiria.${NC}"
+    echo "Desative antes: sudo mvision-overlay --disable && sudo reboot"
+    exit 1
+fi
+
 # Auto-protecao: codigo copiado do Windows (FileZilla/SFTP) pode vir com CRLF,
 # que quebra scripts e units no Linux. Normaliza tudo antes de usar.
 CRLF_COUNT=$(grep -rlI $'\r' "$SCRIPT_DIR" 2>/dev/null | wc -l)
@@ -77,7 +106,8 @@ id "$SERVICE_USER" &>/dev/null && ok "Usuario $SERVICE_USER existe" || {
 echo ""
 echo "[2/10] Dependencias do sistema (apt)"
 # -----------------------------------------------------------------------------
-APT_PKGS=(git git-lfs python3-pip python3-opencv python3-picamera2 curl)
+# git NAO entra na lista: o dispositivo nunca usa git (politica de seguranca)
+APT_PKGS=(python3-pip python3-opencv python3-picamera2 curl parted)
 MISSING_APT=()
 for pkg in "${APT_PKGS[@]}"; do
     dpkg -s "$pkg" &>/dev/null || MISSING_APT+=("$pkg")
@@ -129,9 +159,9 @@ echo "[4/10] Modelos YOLO"
 for model in "$PROJECT_DIR/yolov8n-pose.pt" "$PROJECT_DIR/yolov8l.pt"; do
     name=$(basename "$model")
     if [ ! -f "$model" ]; then
-        fail "$name nao encontrado (copie o arquivo ou rode git lfs pull com internet)"
+        fail "$name nao encontrado (copie o arquivo real via FileZilla/SFTP ou pendrive)"
     elif head -c 24 "$model" | grep -q "version https"; then
-        fail "$name e um PONTEIRO Git LFS, nao o modelo real. Rode: git lfs pull"
+        fail "$name e um PONTEIRO Git LFS, nao o modelo real - copie o .pt verdadeiro via FileZilla/SFTP ou pendrive (o dispositivo nao usa git)"
     else
         ok "$name valido ($(du -h "$model" | cut -f1))"
     fi
@@ -196,7 +226,10 @@ if [ ! -f /etc/systemd/system.conf.d/mvision-watchdog.conf ]; then
 RuntimeWatchdogSec=15
 RebootWatchdogSec=2min
 EOF
-    ok "Watchdog de hardware configurado (efetivo apos reboot)"
+    # daemon-reexec aplica o RuntimeWatchdogSec JA neste boot (sem ele, o
+    # watchdog so armaria no proximo reboot e o doctor acusaria falha)
+    systemctl daemon-reexec 2>/dev/null || true
+    ok "Watchdog de hardware configurado e armado"
 else
     ok "Watchdog de hardware ja configurado"
 fi
@@ -227,6 +260,15 @@ if [ -f "$BOOT_CONFIG" ]; then
     else
         ok "HDMI hotplug ja configurado"
     fi
+    # Watchdog de hardware: habilita explicitamente o chip (bcm2835_wdt).
+    # Sem isto o RuntimeWatchdogSec do systemd pode nao ter dispositivo
+    # para alimentar e a protecao contra travamento de kernel fica inerte.
+    if ! grep -q "^dtparam=watchdog=on" "$BOOT_CONFIG"; then
+        { echo ""; echo "# MVision: watchdog de hardware"; echo "dtparam=watchdog=on"; } >> "$BOOT_CONFIG"
+        ok "Watchdog de hardware habilitado no boot (efetivo apos reboot)"
+    else
+        ok "Watchdog de hardware ja habilitado no boot"
+    fi
 else
     warn "config.txt nao encontrado (nao e Raspberry Pi?) - etapa de display pulada"
 fi
@@ -255,8 +297,23 @@ ok "mvision-doctor instalado (rode 'mvision-doctor' para diagnostico)"
 install -m 755 "$SCRIPT_DIR/usb-update.sh" /usr/local/bin/mvision-usb-update
 ok "Atualizador USB instalado"
 install -m 755 "$SCRIPT_DIR/firstboot.sh" /usr/local/bin/mvision-firstboot
+install -m 755 "$SCRIPT_DIR/setup-overlay.sh" /usr/local/bin/mvision-overlay
+ok "mvision-overlay instalado (protecao do SD: mvision-overlay --status)"
 install_unit "$SCRIPT_DIR/mvision-firstboot.service" /etc/systemd/system/mvision-firstboot.service
 [ "$NEED_DAEMON_RELOAD" = 1 ] && systemctl daemon-reload
+
+# Version-stamp: o dispositivo nao tem git (politica), entao a versao
+# instalada e identificada por data + hash do conteudo do codigo.
+CODE_HASH=$( (cat "$PROJECT_DIR/main.py" "$PROJECT_DIR/config.py" "$PROJECT_DIR"/modules/*.py \
+    "$PROJECT_DIR"/web/backend/*.py "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.service 2>/dev/null) \
+    | sha256sum | cut -c1-12)
+RELEASE_TAG=$(cat "$PROJECT_DIR/VERSION" 2>/dev/null || echo "sem-tag")
+cat > /etc/mvision-version << EOF
+release=$RELEASE_TAG
+code_hash=$CODE_HASH
+installed_at=$(date '+%Y-%m-%d %H:%M:%S')
+EOF
+ok "Versao registrada: $RELEASE_TAG ($CODE_HASH)"
 
 # -----------------------------------------------------------------------------
 echo ""
@@ -270,6 +327,27 @@ if [ "$PREPARE_IMAGE" = 1 ]; then
     echo "=============================================================="
     echo " PREPARANDO SD PARA IMAGEM DOURADA"
     echo "=============================================================="
+    if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = "overlay" ]; then
+        fail "Overlay ativo - a imagem dourada deve ser selada com overlay DESATIVADO (mvision-overlay --disable + reboot)"
+        exit 1
+    fi
+    # Politica de protecao do SD nas unidades clonadas: o firstboot le este
+    # arquivo. ENABLE_OVERLAY=1 -> reserva particao de dados, migra e liga o
+    # overlay automaticamente. Deixe 0 ate o teste de queda de energia (V9)
+    # ser revalidado com o overlay ativo.
+    BOOT_DIR="/boot/firmware"; [ -d "$BOOT_DIR" ] || BOOT_DIR="/boot"
+    if [ ! -f "$BOOT_DIR/mvision-firstboot.conf" ]; then
+        cat > "$BOOT_DIR/mvision-firstboot.conf" << 'EOF'
+# Configuracao do primeiro boot das unidades clonadas desta imagem
+# ENABLE_OVERLAY=1 liga a protecao do SD (raiz somente-leitura) no firstboot
+ENABLE_OVERLAY=0
+# Tamanho da particao de dados persistente (GB) reservada no firstboot
+DATA_SIZE_GB=4
+EOF
+        ok "mvision-firstboot.conf criado em $BOOT_DIR (ENABLE_OVERLAY=0)"
+    else
+        ok "mvision-firstboot.conf ja presente em $BOOT_DIR"
+    fi
     systemctl stop hospital-monitor mvision-web &>/dev/null
     # Remove segredos/identidade que NAO podem ser clonados entre unidades
     rm -f "$PROJECT_DIR/config/web_auth.json" \

@@ -33,6 +33,19 @@ UNIT_DIR=$(grep -oP '^WorkingDirectory=\K.*' /etc/systemd/system/hospital-monito
 PROJECT_DIR="${UNIT_DIR:-/mvision}"
 mkdir -p "$APPLIED_DIR" "$MOUNT_POINT"
 
+# --- Ciclo do overlay (protecao do SD) ---------------------------------------
+# Com o overlay ativo, extrair a atualizacao seria inutil (iria para a RAM).
+# O ciclo e: detectar pacote novo -> desligar overlay + marcador -> reboot ->
+# aplicar de verdade -> religar overlay -> reboot. O marcador mora em local
+# PERSISTENTE (particao de dados ou boot), nunca sob o overlay.
+overlay_active() { [ "$(findmnt -no FSTYPE / 2>/dev/null)" = "overlay" ]; }
+if findmnt -no TARGET /mvision-data &>/dev/null; then
+    REENABLE_MARKER=/mvision-data/.mvision-reenable-overlay
+else
+    BOOT_DIR="/boot/firmware"; [ -d "$BOOT_DIR" ] || BOOT_DIR="/boot"
+    REENABLE_MARKER="$BOOT_DIR/mvision-reenable-overlay"
+fi
+
 cleanup() { umount "$MOUNT_POINT" 2>/dev/null; }
 trap cleanup EXIT
 
@@ -71,6 +84,25 @@ for dev in /dev/sd[a-z][0-9]*; do
     fi
     echo "  Checksum OK"
 
+    # Overlay ativo? Nao da para aplicar neste boot: desliga e reinicia.
+    if overlay_active; then
+        if [ -f "$REENABLE_MARKER" ]; then
+            echo "  ERRO: overlay continua ativo apos tentativa de desativacao anterior."
+            echo "  Intervencao manual: sudo mvision-overlay --disable && sudo reboot"
+            exit 1
+        fi
+        echo "  Overlay ativo - desativando para aplicar a atualizacao no proximo boot..."
+        if raspi-config nonint disable_overlayfs; then
+            touch "$REENABLE_MARKER"
+            echo "  Reiniciando em 5s (a atualizacao sera aplicada no proximo boot)"
+            ( sleep 5; reboot ) &
+            exit 0
+        else
+            echo "  ERRO: falha ao desativar o overlay - atualizacao adiada"
+            exit 1
+        fi
+    fi
+
     # Aplica: backup leve do codigo atual + extracao
     echo "  Parando servicos..."
     systemctl stop hospital-monitor mvision-web 2>/dev/null
@@ -87,6 +119,17 @@ for dev in /dev/sd[a-z][0-9]*; do
         echo "  Extraido com sucesso - rodando instalador..."
         bash "$PROJECT_DIR/deploy/install.sh" && echo "  ATUALIZACAO $PKG_NAME APLICADA" \
             || echo "  AVISO: instalador reportou problemas (ver acima)"
+        # Se este boot veio do ciclo do overlay, religa a protecao do SD
+        if [ -f "$REENABLE_MARKER" ]; then
+            rm -f "$REENABLE_MARKER"
+            echo "  Religando protecao do SD (overlay)..."
+            if command -v mvision-overlay >/dev/null && mvision-overlay --enable; then
+                echo "  Overlay religado - reiniciando em 5s"
+                ( sleep 5; reboot ) &
+            else
+                echo "  AVISO: falha ao religar o overlay - religue manualmente (mvision-overlay --enable)"
+            fi
+        fi
     else
         echo "  ERRO na extracao - restaurando backup..."
         tar xzf "$BACKUP" -C "$PROJECT_DIR"

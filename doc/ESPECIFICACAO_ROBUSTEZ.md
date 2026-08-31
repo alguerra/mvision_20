@@ -156,11 +156,11 @@ Executar com atores em quarto simulado, após P0 (feito) e antes da instalação
 
 ## HARDENING ADICIONAL (revisão pós-P0)
 
-Itens identificados na revisão final de fragilidades. Os três primeiros estão **implementados**; o overlayroot fica documentado como passo de imagem do sistema.
+Itens identificados na revisão final de fragilidades. Todos os itens abaixo estão **implementados** (o overlay pende apenas da revalidação V9 para ser ligado por padrão).
 
 ### Implementados
 1. **`data/` fora do git** — imagens de alerta, logs e `bed_reference.json` eram versionados; qualquer mudança em campo travava o `git pull` do deploy. Agora `data/`, `config/runtime_config.json` e `config/web_auth.json` estão no `.gitignore` e fora do índice. **Migração no RPi (uma única vez):** antes do primeiro pull desta versão, preserve a calibração: `cp data/bed_reference.json /tmp/ && git checkout -- data/ && git pull && cp /tmp/bed_reference.json data/`.
-2. **Watchdog de hardware** — `install.sh` cria `/etc/systemd/system.conf.d/mvision-watchdog.conf` com `RuntimeWatchdogSec=15` (chip `bcm2835_wdt`): kernel panic ou travamento do systemd reinicia o Pi sozinho. Efetivo após reboot.
+2. **Watchdog de hardware** — `install.sh` cria `/etc/systemd/system.conf.d/mvision-watchdog.conf` com `RuntimeWatchdogSec=15` (chip `bcm2835_wdt`), adiciona `dtparam=watchdog=on` ao `config.txt` e arma imediatamente via `daemon-reexec`: kernel panic ou travamento do systemd reinicia o Pi sozinho. O `mvision-doctor` verifica o funcionamento REAL (existência de `/dev/watchdog` + `RuntimeWatchdogUSec` armado no systemd), não apenas a presença do arquivo de config.
 3. **Heartbeat visível no painel (anti-falha-silenciosa)** — o monitor publica `/tmp/mvision_status.json` (tmpfs, zero desgaste de SD) a cada 30 s com estado e contagem de pessoas. O backend web cruza isso com o systemd: serviço "active" mas sem sinal >90 s aparece como **"ATENCAO: SEM SINAL do monitor ha Xs"** no status existente do painel, e o endpoint `GET /api/monitor/status` expõe o estado ao vivo (para o frontend P1.4 e para checagens via `curl`).
 
 ### Instalação de campo (implementado)
@@ -171,14 +171,16 @@ Itens identificados na revisão final de fragilidades. Os três primeiros estão
 - **Healthcheck do painel** (timer de 2 min): uvicorn "active" mas sem responder → restart automático (fecha o P1.5).
 - Docs: `doc/IMAGEM_DOURADA.md` (build da imagem por release) e `doc/CHECKLIST_TECNICO.md` (1 página, sem terminal).
 
-### Documentado (aplicar na imagem do sistema, com teste dedicado no RPi)
-4. **Raiz somente-leitura com overlayroot** — a proteção física definitiva contra corrupção de filesystem por corte de energia (as escritas do MVISION já são atômicas, mas o ext4 do SO não é imune). Procedimento sugerido (Raspberry Pi OS Bookworm):
-   1. `sudo apt install overlayroot` (com internet, antes do envio ao hospital);
-   2. mover `data/` e `config/` para uma partição gravável dedicada (ex: `/dev/mmcblk0p3` montada em `/mvision-data`) e criar symlinks `/mvision/data → /mvision-data/data` e `/mvision/config → /mvision-data/config`;
-   3. habilitar com `overlayroot="tmpfs"` em `/etc/overlayroot.conf`;
-   4. para manutenção/atualização: `sudo overlayroot-chroot` (ou desabilitar, atualizar, reabilitar);
-   5. validar V9 (cortes de energia) novamente com o overlay ativo.
+### Implementado (pendente revalidação V9 para ligar por padrão)
+4. **Raiz somente-leitura (overlay) + partição de dados persistente** — a proteção física definitiva contra corrupção de filesystem por corte de energia (as escritas do MVISION já são atômicas, mas o ext4 do SO não é imune). Implementação: `deploy/setup-overlay.sh`, instalado como **`mvision-overlay`** (usa o overlayfs nativo do Raspberry Pi OS via `raspi-config`, não o pacote overlayroot):
+   - `--prepare-data` cria a partição ext4 `MVISIONDATA` no espaço livre após a raiz (fstab + montagem em `/mvision-data`); `--migrate` move `data/` e `config/` para lá com symlinks; `--enable`/`--disable` ligam/desligam o overlay (reboot); `--status` mostra o estado.
+   - **Imagem dourada:** o firstboot expande a raiz *reservando* `DATA_SIZE_GB` (default 4 GB), cria/migra a partição de dados e — se `ENABLE_OVERLAY=1` no `mvision-firstboot.conf` da partição de boot — liga o overlay sozinho. Selar a imagem sempre com overlay desativado.
+   - **Atualização USB com overlay ativo:** o `mvision-usb-update` faz o ciclo automaticamente (desativa overlay → reboot → aplica → reativa → reboot), com marcador persistente e guarda contra loop.
+   - **Doctor:** com overlay ativo, verifica partição montada e symlinks (dados indo para RAM = FALHA); inativo = AVISO.
+   - **Pendente:** revalidar V9 (cortes de energia) com o overlay ativo antes de mudar `ENABLE_OVERLAY` para 1 na imagem.
    Complementos de hardware recomendados: cartão SD industrial (ex: SanDisk High Endurance), fonte oficial 27 W e dissipador ativo (o `CPUQuota=90%` contínuo em ambiente quente causa throttling — que degrada o FPS e alonga todas as janelas da FSM, que são contadas em frames).
+5. **Identificação de versão sem git** — o instalador grava `/etc/mvision-version` (tag do arquivo `VERSION` + hash SHA-256 do conteúdo do código + data); o `mvision-doctor` exibe. As instruções vestigiais de `git lfs pull` foram removidas do instalador e do doctor (o dispositivo não usa git).
+6. **Checagem de SO** — o instalador exige Raspberry Pi OS Bookworm (aborta com mensagem clara em Bullseye e anteriores; `MVISION_SKIP_OS_CHECK=1` força).
 
 ## COMO OPERAR AS NOVAS PROTEÇÕES
 
