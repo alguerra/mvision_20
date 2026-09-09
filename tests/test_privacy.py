@@ -3,7 +3,10 @@ import unittest
 
 import numpy as np
 
-from modules.privacy import apply_face_privacy, head_circle, MASK_MIN_RADIUS
+from modules.privacy import (
+    apply_face_privacy, head_circle, mask_head,
+    MASK_MIN_RADIUS, MASK_COLOR, SOLID_FALLBACK_RADIUS,
+)
 
 
 def make_kp(head=True, shoulders=True):
@@ -56,15 +59,56 @@ class TestHeadCircle(unittest.TestCase):
         self.assertIsNone(head_circle(kp, conf))
 
 
+def checker(h=240, w=320, cell=4):
+    """Frame xadrez preto/branco: alta variancia local em qualquer ponto."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    m = (((yy // cell) + (xx // cell)) % 2).astype(np.uint8) * 255
+    return np.dstack([m, m, m]).copy()
+
+
+def local_std(img, cx, cy, r):
+    return float(img[cy - r:cy + r, cx - r:cx + r].astype(float).std())
+
+
 class TestApplyFacePrivacy(unittest.TestCase):
-    def test_pinta_regiao_da_cabeca_de_todas_as_pessoas(self):
-        frame = np.full((240, 320, 3), 255, dtype=np.uint8)
-        kp1, conf1 = make_kp()
-        kp2 = kp1.copy(); kp2[:, 0] += 150  # segunda pessoa deslocada
-        out = apply_face_privacy(frame, [(kp1, conf1, None), (kp2, conf1, None)])
-        # centro do rosto das duas pessoas nao e mais branco
-        self.assertFalse((out[47, 100] == 255).all())
-        self.assertFalse((out[47, 250] == 255).all())
+    def test_cobre_regiao_da_cabeca_de_todas_as_pessoas(self):
+        for style in ("pixelate", "blur", "solid"):
+            frame = checker()
+            before = local_std(frame, 100, 47, 8)
+            kp1, conf1 = make_kp()
+            kp2 = kp1.copy(); kp2[:, 0] += 150  # segunda pessoa deslocada
+            out = apply_face_privacy(
+                frame, [(kp1, conf1, None), (kp2, conf1, None)], style=style
+            )
+            # detalhe fino (xadrez) some no centro do rosto das duas pessoas
+            self.assertLess(local_std(out, 100, 47, 8), before * 0.5, style)
+            self.assertLess(local_std(out, 250, 47, 8), before * 0.5, style)
+            # fora da cabeca o frame continua intacto
+            self.assertGreater(local_std(out, 100, 200, 8), before * 0.9, style)
+
+    def test_solid_pinta_cor_da_mascara(self):
+        frame = checker()
+        kp, conf = make_kp()
+        out = apply_face_privacy(frame, [(kp, conf, None)], style="solid")
+        self.assertTrue((out[47, 100] == MASK_COLOR).all())
+
+    def test_raio_pequeno_cai_no_solido(self):
+        frame = checker()
+        mask_head(frame, 100, 100, SOLID_FALLBACK_RADIUS - 1, "pixelate")
+        self.assertTrue((frame[100, 100] == MASK_COLOR).all())
+
+    def test_estilo_desconhecido_vira_solido(self):
+        frame = checker()
+        mask_head(frame, 100, 100, 30, "xyz")
+        self.assertTrue((frame[100, 100] == MASK_COLOR).all())
+
+    def test_cabeca_na_borda_do_frame_nao_quebra(self):
+        for style in ("pixelate", "blur"):
+            frame = checker()
+            mask_head(frame, 2, 2, 30, style)         # canto superior esquerdo
+            mask_head(frame, 318, 238, 30, style)     # canto inferior direito
+            mask_head(frame, -5, 120, 20, style)      # centro fora do frame
+            self.assertLess(local_std(frame, 8, 8, 6), 60, style)
 
     def test_pessoa_sem_dados_nao_quebra(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)

@@ -1,5 +1,13 @@
 """
-Anonimizacao visual — circulo solido sobre rosto/cabeca de TODA pessoa exibida.
+Anonimizacao visual — mascara sobre rosto/cabeca de TODA pessoa exibida.
+
+Estilos (config.PRIVACY_FACE_MASK_STYLE):
+  "pixelate" — mosaico grosso dentro de um circulo (default; barato no RPi e
+               dificil de reverter);
+  "blur"     — desfoque gaussiano forte dentro de um circulo;
+  "solid"    — circulo cinza solido (comportamento original).
+Cabecas muito pequenas caem sempre no solido: borrar meia duzia de pixels
+nao anonimiza nada.
 
 Garantia de privacidade na apresentacao: nenhuma imagem renderizada (monitor
 HDMI, painel web, imagens de alerta salvas) permite identificar paciente ou
@@ -23,6 +31,11 @@ SHOULDER_KP_INDICES = (5, 6)
 MASK_COLOR = (90, 90, 90)           # cinza neutro, solido
 MASK_MIN_RADIUS = 14                # px; nunca menor que isto
 KP_CONF_MIN = 0.25
+
+MASK_STYLES = ("pixelate", "blur", "solid")
+SOLID_FALLBACK_RADIUS = 10          # raio abaixo disto -> sempre solido
+PIXELATE_BLOCKS = 6                 # blocos por diametro no mosaico
+BLUR_PASSES = 2
 
 
 def head_circle(
@@ -97,23 +110,67 @@ def head_circle(
     return None
 
 
+def _obscure_roi(roi: np.ndarray, style: str) -> np.ndarray:
+    """Devolve copia da ROI pixelizada ou desfocada (nunca in-place)."""
+    h, w = roi.shape[:2]
+    if style == "pixelate":
+        small = cv2.resize(
+            roi,
+            (max(1, w // max(1, w // PIXELATE_BLOCKS)),
+             max(1, h // max(1, h // PIXELATE_BLOCKS))),
+            interpolation=cv2.INTER_AREA,   # media real do bloco, nao amostragem
+        )
+        return cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+    # blur: kernel proporcional ao tamanho da ROI, sempre impar e >= 15
+    k = max(15, (max(h, w) // 2) | 1)
+    out = roi
+    for _ in range(BLUR_PASSES):
+        out = cv2.GaussianBlur(out, (k, k), 0)
+    return out
+
+
+def mask_head(frame: np.ndarray, cx: int, cy: int, r: int, style: str) -> None:
+    """Aplica a mascara de UMA cabeca no frame, in-place."""
+    h, w = frame.shape[:2]
+    if style not in MASK_STYLES:
+        style = "solid"
+    if style == "solid" or r < SOLID_FALLBACK_RADIUS:
+        cv2.circle(frame, (cx, cy), r, MASK_COLOR, -1)
+        cv2.circle(frame, (cx, cy), r, (40, 40, 40), 2)
+        return
+
+    x1, y1 = max(0, cx - r), max(0, cy - r)
+    x2, y2 = min(w, cx + r + 1), min(h, cy + r + 1)
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        cv2.circle(frame, (cx, cy), r, MASK_COLOR, -1)
+        return
+
+    roi = frame[y1:y2, x1:x2]
+    obscured = _obscure_roi(roi, style)
+    circle = np.zeros(roi.shape[:2], dtype=np.uint8)
+    cv2.circle(circle, (cx - x1, cy - y1), r, 255, -1)
+    roi[circle > 0] = obscured[circle > 0]
+    cv2.circle(frame, (cx, cy), r, (40, 40, 40), 1)
+
+
 def apply_face_privacy(
     frame: np.ndarray,
     persons: List[Tuple[np.ndarray, Optional[np.ndarray], Optional[Sequence[float]]]],
+    style: str = "pixelate",
 ) -> np.ndarray:
     """
-    Desenha o circulo de anonimizacao para cada pessoa da lista.
+    Aplica a mascara de anonimizacao para cada pessoa da lista.
 
     Args:
         frame: Frame BGR (modificado in-place e retornado).
         persons: Lista de (keypoints_xy, keypoints_conf, bbox) — TODAS as
             deteccoes mantidas, paciente e acompanhantes.
+        style: "pixelate" | "blur" | "solid" (ver MASK_STYLES).
     """
     for kp_xy, kp_conf, bbox in persons:
         circle = head_circle(kp_xy, kp_conf, bbox)
         if circle is None:
             continue
         cx, cy, r = circle
-        cv2.circle(frame, (cx, cy), r, MASK_COLOR, -1)
-        cv2.circle(frame, (cx, cy), r, (40, 40, 40), 2)
+        mask_head(frame, cx, cy, r, style)
     return frame
