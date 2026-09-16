@@ -97,8 +97,9 @@ sudo bash deploy/install.sh
 
 O instalador é **idempotente**: se algo falhar, corrija o que a linha `[ERRO]` indicar e rode o mesmo comando de novo — ele pula o que já está feito. Ele instala e configura: os serviços `hospital-monitor` e `mvision-web`, watchdog de hardware, limite de logs do sistema, regra do botão de restart do painel, display headless, o diagnóstico `mvision-doctor` e o atualizador por pendrive — e termina rodando a verificação completa.
 
-**✔ Ponto de verificação:** a última seção da saída mostra **`INSTALACAO OK`**.
-(Único aviso aceitável nesta fase: "Sem referencia de cama" — a calibração vem na Etapa 6.)
+**✔ Ponto de verificação:** numa instalação **nova**, a verificação final vai mostrar **`INSTALACAO COM PROBLEMAS`** com um único item em FALHA: *watchdog de hardware SEM DISPOSITIVO*. Isso é **esperado**: o `dtparam=watchdog=on` gravado no `config.txt` só entra em vigor no próximo boot. O próprio instalador imprime, em amarelo, a instrução de reiniciar e rodar o `mvision-doctor` (Etapa 5).
+Qualquer **outra** linha `[ERRO]` ou `[FALHA]` deve ser corrigida antes de seguir. (Aviso aceitável nesta fase: "Sem referencia de cama" — a calibração vem na Etapa 7.)
+Se o instalador for rodado de novo num sistema já reiniciado, o resultado esperado passa a ser **`INSTALACAO OK`**.
 
 ## Etapa 5 — Reiniciar
 
@@ -106,7 +107,7 @@ O instalador é **idempotente**: se algo falhar, corrija o que a linha `[ERRO]` 
 sudo reboot
 ```
 
-Necessário para ativar o watchdog de hardware e o HDMI headless. Aguarde ~3 min (a primeira inicialização carrega os modelos) e confira:
+**Passo obrigatório**, não pule: é o reboot que ativa o watchdog de hardware (`/dev/watchdog`) e o HDMI headless. Sem ele o sistema roda, mas sem a proteção contra travamento do kernel. Aguarde ~3 min (a primeira inicialização carrega os modelos) e confira:
 
 ```bash
 ssh tmed@mvision.local
@@ -117,6 +118,7 @@ mvision-doctor
 - `[PASS] hospital-monitor ativo` e `[PASS] mvision-web ativo`
 - `[PASS] Monitor publicando status ha Xs`
 - `[PASS] Camera CSI detectada`
+- `[PASS] Watchdog de hardware ATIVO` — se ainda aparecer FALHA aqui, o reboot não foi feito ou o `config.txt` não recebeu `dtparam=watchdog=on`; rode `sudo bash deploy/install.sh` de novo e reinicie.
 
 ## Etapa 6 — Configurar pelo painel web
 
