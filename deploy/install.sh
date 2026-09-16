@@ -365,6 +365,9 @@ EOF
 fi
 
 systemctl restart mvision-web
+# O timer foi apenas habilitado acima; sem start ele so roda no proximo boot
+# e o painel ficaria sem supervisao ate la
+systemctl start mvision-web-healthcheck.timer 2>/dev/null || true
 systemctl restart hospital-monitor
 ok "Servicos (re)iniciados"
 

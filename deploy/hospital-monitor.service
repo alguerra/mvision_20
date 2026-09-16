@@ -37,7 +37,11 @@ Environment=YOLO_OFFLINE=True
 Environment=ULTRALYTICS_OFFLINE=True
 Environment=YOLO_AUTOINSTALL=False
 
-# Timeout generoso para inicialização (YOLO demora para carregar)
+# Timeout generoso para inicialização (YOLO demora para carregar).
+# Antes de READY=1 o main.py envia EXTEND_TIMEOUT_USEC junto com cada
+# heartbeat (SYSTEMD_STARTUP_EXTEND_USEC=90s), entao uma init longa mas viva
+# (ex: camera ausente em retry) nao e morta a cada 5 min; uma init travada
+# continua sendo morta em ate 90 s.
 TimeoutStartSec=300
 TimeoutStopSec=30
 

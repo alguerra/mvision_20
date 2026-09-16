@@ -111,6 +111,13 @@ from modules.state_machine import PatientPoseState, SystemState
 HEARTBEAT_FILE = "/tmp/hospital-monitor-heartbeat"
 HEARTBEAT_INTERVAL = 30  # Segundos entre heartbeats
 
+# Enquanto READY=1 nao foi enviado, o systemd protege a inicializacao apenas
+# com TimeoutStartSec (WATCHDOG=1 NAO estende esse prazo). Cada heartbeat
+# pre-READY pede mais este intervalo, espelhando o WatchdogSec=90 do unit:
+# uma init longa (camera ausente, modelo lento) nao vira ciclo de kill a cada
+# 5 min, mas uma init TRAVADA continua sendo morta em ate 90 s.
+SYSTEMD_STARTUP_EXTEND_USEC = 90_000_000
+
 # Status do monitor para o painel web (/tmp = tmpfs, zero desgaste de SD).
 # Sem isso, um monitor em loop de reinicializacao (ex: camera morta) parece
 # "ativo" no painel e ninguem percebe que o leito esta sem cobertura.
@@ -188,33 +195,61 @@ def _needs_ir_normalization(frame: np.ndarray) -> bool:
     return imbalance >= IR_CHANNEL_IMBALANCE_RATIO
 
 
+# Estado do protocolo sd_notify (processo unico, sem threads no loop principal)
+_systemd_ready_sent = False
+_systemd_notify_failed_logged = False
+
+
 def _notify_systemd(message: bytes) -> None:
-    """Envia notificação ao systemd via NOTIFY_SOCKET."""
+    """Envia notificação ao systemd via NOTIFY_SOCKET.
+
+    Falha de envio e logada UMA vez: sem isso, um socket quebrado faz o
+    servico morrer por WatchdogSec a cada 90 s sem nenhuma pista no journal.
+    """
+    global _systemd_ready_sent, _systemd_notify_failed_logged
     if not IS_LINUX:
         return
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return  # rodando fora do systemd (dev/manual): nada a notificar
     try:
         import socket
-        addr = os.environ.get("NOTIFY_SOCKET")
-        if addr:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            try:
-                sock.connect(addr)
-                sock.sendall(message)
-            finally:
-                sock.close()
-    except Exception:
-        pass
+        # Socket abstrato do Linux: "@" inicial vira byte nulo
+        if addr.startswith("@"):
+            addr = "\0" + addr[1:]
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            sock.connect(addr)
+            sock.sendall(message)
+        finally:
+            sock.close()
+        if message.startswith(b"READY=1"):
+            _systemd_ready_sent = True
+    except Exception as e:
+        if not _systemd_notify_failed_logged:
+            _systemd_notify_failed_logged = True
+            logger.warning(
+                f"sd_notify falhou (NOTIFY_SOCKET={os.environ.get('NOTIFY_SOCKET')}): {e} "
+                "- o systemd pode reiniciar o servico por watchdog"
+            )
 
 
 def send_heartbeat() -> None:
     """
     Envia heartbeat para o watchdog do sistema.
     Notifica o systemd watchdog e atualiza arquivo de heartbeat.
+    Antes de READY=1, tambem estende o TimeoutStartSec (ver
+    SYSTEMD_STARTUP_EXTEND_USEC).
     """
     if not IS_LINUX:
         return
 
-    _notify_systemd(b"WATCHDOG=1")
+    if _systemd_ready_sent:
+        _notify_systemd(b"WATCHDOG=1")
+    else:
+        _notify_systemd(
+            b"WATCHDOG=1\nEXTEND_TIMEOUT_USEC=%d" % SYSTEMD_STARTUP_EXTEND_USEC
+        )
 
     try:
         Path(HEARTBEAT_FILE).touch()
