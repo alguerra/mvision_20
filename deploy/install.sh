@@ -248,6 +248,7 @@ fi
 echo ""
 echo "[7/10] Display/boot (HDMI sem monitor)"
 # -----------------------------------------------------------------------------
+NEED_REBOOT=0
 BOOT_CONFIG="/boot/config.txt"
 [ -f "/boot/firmware/config.txt" ] && BOOT_CONFIG="/boot/firmware/config.txt"
 if [ -f "$BOOT_CONFIG" ]; then
@@ -257,6 +258,7 @@ if [ -f "$BOOT_CONFIG" ]; then
         { echo ""; echo "# MVision: HDMI ativo mesmo sem monitor"; echo "hdmi_force_hotplug=1"; \
           echo "hdmi_group=1"; echo "hdmi_mode=4"; } >> "$BOOT_CONFIG"
         ok "HDMI hotplug configurado (efetivo apos reboot)"
+        NEED_REBOOT=1
     else
         ok "HDMI hotplug ja configurado"
     fi
@@ -266,6 +268,7 @@ if [ -f "$BOOT_CONFIG" ]; then
     if ! grep -q "^dtparam=watchdog=on" "$BOOT_CONFIG"; then
         { echo ""; echo "# MVision: watchdog de hardware"; echo "dtparam=watchdog=on"; } >> "$BOOT_CONFIG"
         ok "Watchdog de hardware habilitado no boot (efetivo apos reboot)"
+        NEED_REBOOT=1
     else
         ok "Watchdog de hardware ja habilitado no boot"
     fi
@@ -389,9 +392,26 @@ if [ "$ERRORS" -eq 0 ] && [ "$DOCTOR_RC" -eq 0 ]; then
     echo " Painel web:  http://${IP_ADDR:-<ip-do-dispositivo>}:8080"
     echo " Senha padrao: mvision123 (o painel exigira a troca)"
     echo " Diagnostico:  mvision-doctor"
+    if [ "$NEED_REBOOT" = 1 ]; then
+        echo ""
+        echo -e " ${YELLOW}ATENCAO:${NC} config.txt foi alterado (watchdog/HDMI). Para concluir:"
+        echo "   1) sudo reboot"
+        echo "   2) apos o boot, rode:  sudo mvision-doctor"
+        echo "   Todos os itens devem sair como PASS."
+    fi
     exit 0
 else
     echo -e " ${RED}INSTALACAO COM PROBLEMAS${NC} (erros: $ERRORS, verificacao: $DOCTOR_RC)"
-    echo " Revise as linhas [ERRO] acima e rode novamente: sudo bash deploy/install.sh"
+    if [ "$NEED_REBOOT" = 1 ] && [ ! -e /dev/watchdog ] && [ "$ERRORS" -eq 0 ]; then
+        echo ""
+        echo -e " ${YELLOW}ESPERADO em instalacao nova:${NC} o watchdog de hardware so aparece"
+        echo " (/dev/watchdog) apos o primeiro reboot. Para concluir a instalacao:"
+        echo "   1) sudo reboot"
+        echo "   2) apos o boot, rode:  sudo mvision-doctor"
+        echo "   Todos os itens devem sair como PASS. Se algo continuar em FALHA,"
+        echo "   rode novamente: sudo bash deploy/install.sh"
+    else
+        echo " Revise as linhas [ERRO] acima e rode novamente: sudo bash deploy/install.sh"
+    fi
     exit 1
 fi
