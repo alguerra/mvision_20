@@ -3,6 +3,7 @@ Gerenciador de alertas GPIO para Raspberry Pi.
 No Windows, simula os alertas via print no terminal.
 """
 
+import logging
 import threading
 import time
 from typing import Optional
@@ -24,6 +25,7 @@ class GPIOAlertManager:
         self._alert_active = threading.Event()
         self._generation = 0  # Identifica o episodio de alerta da thread atual
         self._system_ready = False
+        self.gpio_error: Optional[str] = None
 
         if self.is_raspberry_pi:
             self._setup_gpio()
@@ -83,10 +85,24 @@ class GPIOAlertManager:
             GPIO.setup(GPIO_PIN_SYSTEM_READY, GPIO.OUT, initial=GPIO.LOW)
             self.gpio_available = True
             print(f"[GPIO] Configurado: Alerta=GPIO{GPIO_PIN_ALERT}, Sistema=GPIO{GPIO_PIN_SYSTEM_READY}")
-        except ImportError:
-            print("[GPIO] RPi.GPIO nao disponivel - modo simulado")
+        except ImportError as e:
+            self.gpio_error = f"RPi.GPIO nao disponivel: {e}"
         except Exception as e:
-            print(f"[GPIO] Erro ao configurar: {e} - modo simulado")
+            # Ex.: RPi.GPIO original no Pi 5 ("Cannot determine SOC peripheral
+            # base address") - precisa do pacote compativel python3-rpi-lgpio
+            self.gpio_error = f"Erro ao configurar GPIO: {e}"
+        if self.gpio_error:
+            # Num Raspberry isto NAO e modo simulado aceitavel: o alerta
+            # fisico nao existe. Log em ERROR + flag publicada no status.
+            msg = (f"[GPIO] FALHA: {self.gpio_error} - ALERTA FISICO (LED) "
+                   f"INOPERANTE neste aparelho")
+            print(msg)
+            logging.getLogger("HospitalMonitor").error(msg)
+
+    @property
+    def physical_alert_ok(self) -> bool:
+        """False quando o aparelho e um Raspberry mas o GPIO nao funciona."""
+        return (not self.is_raspberry_pi) or self.gpio_available
 
     def set_system_ready(self, ready: bool) -> None:
         """Liga/desliga indicador de sistema configurado (GPIO 20)."""

@@ -15,7 +15,7 @@ Complementa `AUDITORIA_2026-07.md`. Cada item segue o formato **problema → sol
 - **Problema:** queda real produz blur, oclusão e saída do quadro — sinais que cancelavam o próprio alerta (auditoria A1, A4, A5).
 - **Solução implementada** (`modules/pose_analyzer.py`):
   - Em RISCO/FORA, ausência de evidência **congela** os scores (nada decai) e, após `FRAMES_TO_LOSE_PATIENT` (15), transiciona para `ALERTA_PERSISTENTE` (nível crítico, GPIO ativo).
-  - `ALERTA_PERSISTENTE` só sai com `ALERT_PERSISTENT_SAFE_FRAMES` (10) frames consecutivos de evidência positiva (paciente visível E dentro da cama) ou reset manual (tecla R / restart).
+  - `ALERTA_PERSISTENTE` só sai com `ALERT_PERSISTENT_SAFE_FRAMES` (10) frames consecutivos de evidência positiva (paciente visível E dentro da cama) ou por expiração do episódio (`ALERT_MAX_DURATION_SECONDS`, default 60 s — o aparelho não tem teclado). Restart NÃO limpa o alerta: o latch em `data/alert_latch.json` o restaura descontando o tempo já decorrido (nov/2026).
   - `insufficient_data` em estado de alerta não des-escala: conta e escala para persistente.
   - MONITORANDO + sumiço: se a última posição do núcleo do corpo era dentro da cama e sem pose sentada/em pé recente → **oclusão presumida** (permanece MONITORANDO, status "Paciente possivelmente coberto"); só assume cama vazia após `OCCLUSION_EMPTY_TIMEOUT_FRAMES` (300 ≈ 60 s). Caso contrário → RISCO_POTENCIAL.
   - `patient_monitor.py` nunca exibe "Cama Vazia" com alerta ativo.
@@ -132,7 +132,7 @@ Executar com atores em quarto simulado, após P0 (feito) e antes da instalação
 | # | Cenário | Procedimento | Resultado esperado |
 |---|---------|--------------|--------------------|
 | V1 | Queda clássica | Deitar 5 min, rolar para fora até o chão | RISCO→FORA ≤10 s, 1 episódio no log, GPIO ativo |
-| V2 | Queda + fuga do quadro | Cair e rastejar para fora do enquadramento | `ALERTA_PERSISTENTE` mantido indefinidamente até evidência segura ou reset |
+| V2 | Queda + fuga do quadro | Cair e rastejar para fora do enquadramento | `ALERTA_PERSISTENTE` mantido até evidência segura ou expiração do episódio (`ALERT_MAX_DURATION_SECONDS`); sobrevive a restart do serviço |
 | V3 | Queda com acompanhante | Acompanhante na poltrona; paciente cai | Alerta ≤15 s com `person_count=2` |
 | V4 | Acompanhante interage | Debruçar sobre a cama, ajeitar travesseiro, 2 min | Zero alertas; flag ACOMPANHADO exibida |
 | V5 | Passante | Atravessar o quarto (cama vazia e com paciente) | Zero alertas; estado inalterado |
@@ -186,5 +186,5 @@ Itens identificados na revisão final de fragilidades. Todos os itens abaixo est
 
 - **Modo desenvolvimento:** `MVISION_DEV=1 python main.py` (imagens de evidência); `MVISION_SKIP_BED=1` (pular calibração). Em produção, nenhum dos dois é definido.
 - **Rollback do modo acompanhante:** painel admin → `COMPANION_ANALYSIS_ENABLED=false` → reiniciar serviço.
-- **Sair de ALERTA_PERSISTENTE manualmente:** tecla R no monitor local, ou restart do serviço (`sudo systemctl restart hospital-monitor`).
+- **Sair de ALERTA_PERSISTENTE:** paciente de volta na cama (evidência positiva) ou expiração automática do episódio (`ALERT_MAX_DURATION_SECONDS`). Restart do serviço não limpa mais o alerta (latch em disco); para descartar à força em bancada: `rm /mvision/data/alert_latch.json` + restart.
 - **Testes de regressão:** `python -m unittest tests.test_pose_state_machine tests.test_detection_pipeline` (roda em qualquer PC, sem câmera).

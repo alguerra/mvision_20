@@ -149,25 +149,45 @@ def save_system_settings(settings: dict) -> tuple:
     o boot; o config.py nao e mais tocado pelo painel).
     """
     try:
-        # Valida e filtra pela whitelist
+        # Validacao de tipo/faixa com a MESMA regra do overlay do monitor
+        # (config.validate_runtime_value): um valor fora da faixa segura pode
+        # desligar o alarme em silencio, entao a gravacao inteira e recusada.
+        try:
+            from config import validate_runtime_value, validate_runtime_consistency
+        except Exception:
+            return False, "Validacao indisponivel (config.py nao importavel) - nada foi salvo"
+
+        defaults = _read_config_defaults()
         current = _read_runtime_overrides()
-        rejected = []
+        errors = []
+        ignored = []
         for key, value in settings.items():
             if key not in RUNTIME_EDITABLE_KEYS:
                 # DEV_MODE etc.: apenas via variavel de ambiente
                 if key not in ("DEV_MODE", "DEV_SKIP_BED_DETECTION"):
-                    rejected.append(key)
+                    ignored.append(key)
                 continue
-            if not isinstance(value, (bool, int, float, str)):
-                rejected.append(key)
+            ok, result = validate_runtime_value(key, value, defaults.get(key))
+            if not ok:
+                errors.append(result)
                 continue
-            current[key] = value
+            current[key] = result
+
+        if not errors:
+            effective = dict(defaults)
+            effective.update(current)
+            consistency_error = validate_runtime_consistency(effective)
+            if consistency_error:
+                errors.append(consistency_error)
+
+        if errors:
+            return False, "Configuracoes NAO salvas: " + "; ".join(errors)
 
         atomic_write_json(RUNTIME_CONFIG_PATH, current)
 
         message = "Configurações salvas com sucesso"
-        if rejected:
-            message += f" (ignoradas: {', '.join(rejected)})"
+        if ignored:
+            message += f" (ignoradas: {', '.join(ignored)})"
         message += ". Reinicie o serviço para aplicar."
         return True, message
     except Exception as e:

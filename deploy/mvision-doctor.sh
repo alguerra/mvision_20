@@ -64,6 +64,20 @@ if [ -f "$STATUS_FILE" ]; then
 else
     failc "Monitor nunca publicou status (arquivo $STATUS_FILE ausente)"
 fi
+LATCH_FILE="$PROJECT_DIR/data/alert_latch.json"
+if [ -f "$LATCH_FILE" ]; then
+    warnc "Alerta ativo persistido ($LATCH_FILE) - sobrevive a reinicio; sai com o paciente de volta na cama ou expira sozinho (ALERT_MAX_DURATION_SECONDS)"
+fi
+
+echo ""
+echo "--- Alerta fisico (GPIO) ---"
+if [ -f "$STATUS_FILE" ] && grep -q '"physical_alert_ok":\s*false' "$STATUS_FILE"; then
+    failc "GPIO INOPERANTE: LED de alerta nao funciona (journalctl -u hospital-monitor | grep GPIO). No Pi 5 use o pacote python3-rpi-lgpio, nao o RPi.GPIO do pip"
+elif [ -f "$STATUS_FILE" ] && grep -q '"physical_alert_ok":\s*true' "$STATUS_FILE"; then
+    pass "GPIO de alerta configurado"
+else
+    warnc "Estado do GPIO ainda nao publicado pelo monitor (aguarde 30s apos a calibracao)"
+fi
 
 echo ""
 echo "--- Camera ---"

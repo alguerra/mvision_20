@@ -11,8 +11,10 @@ ultralytics>=8.0.0
 # Camera do Raspberry Pi
 picamera2>=0.3.12
 
-# GPIO para alertas visuais (LEDs)
-RPi.GPIO>=0.7.0
+# GPIO para alertas visuais (LEDs): NAO instalar RPi.GPIO via pip.
+# O RPi.GPIO original nao funciona no Pi 5 e, instalado pelo pip, sombreia o
+# pacote do sistema. Use o do apt: sudo apt install -y python3-rpi-lgpio
+# (mesma API 'import RPi.GPIO', compativel com Pi 4 e Pi 5).
 
 # Dependencias do picamera2 (instalar via apt no Raspberry Pi OS)
 # sudo apt install -y python3-libcamera python3-kms++

@@ -5,6 +5,7 @@ Extrai pontos do corpo dos keypoints COCO format e analisa posicao
 em relacao a area da cama para determinar risco de queda.
 """
 
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -12,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from config import (
+    ALERT_MAX_DURATION_SECONDS,
     ALERT_PERSISTENT_SAFE_FRAMES,
     COMPANION_ANALYSIS_ENABLED,
     COMPANION_RISK_ENTER_BOOST,
@@ -721,7 +723,9 @@ class PoseStateMachineEMA:
     Principio fail-safe: um estado de alerta NUNCA e cancelado por
     ausencia de evidencia (paciente sumiu, keypoints fracos, oclusao).
     Nesses casos o alerta e mantido e escalado para ALERTA_PERSISTENTE,
-    saindo apenas com evidencia positiva de seguranca ou reset manual.
+    saindo com evidencia positiva de seguranca ou, como o aparelho nao tem
+    teclado, por expiracao do episodio (ALERT_MAX_DURATION_SECONDS), que
+    devolve a FSM para AGUARDANDO.
     """
 
     # Estados possiveis
@@ -749,6 +753,8 @@ class PoseStateMachineEMA:
         threshold_exit_safe: float = EMA_THRESHOLD_EXIT_SAFE,
         threshold_patient_detected: float = EMA_THRESHOLD_PATIENT_DETECTED,
         threshold_patient_lost: float = EMA_THRESHOLD_PATIENT_LOST,
+        alert_max_duration_seconds: float = ALERT_MAX_DURATION_SECONDS,
+        clock=time.monotonic,
     ):
         self.alpha = alpha
         self.threshold_enter_risk = threshold_enter_risk
@@ -807,8 +813,56 @@ class PoseStateMachineEMA:
         self._pending_published: Optional[str] = None
         self._pending_published_count = 0
 
+        # Expiracao do episodio de alerta (aparelho sem teclado para reset).
+        # Relogio monotonico injetavel (testes); episodio = da primeira
+        # entrada em qualquer estado de alerta ate sair de todos eles.
+        self._clock = clock
+        self.alert_max_duration_seconds = alert_max_duration_seconds
+        self._alert_started_at: Optional[float] = None
+        self._alert_expired_pending = False
+
 
     def update(
+        self,
+        analysis: Optional[PositionAnalysis],
+        body_points: Optional[BodyPoints],
+        person_count: int = 1,
+    ) -> str:
+        """
+        Atualiza estado (ver _update_core) e aplica a expiracao do episodio
+        de alerta.
+        """
+        published = self._update_core(analysis, body_points, person_count)
+
+        if self.current_state not in self.ALERT_STATES:
+            self._alert_started_at = None
+            return published
+
+        now = self._clock()
+        if self._alert_started_at is None:
+            self._alert_started_at = now
+        elif now - self._alert_started_at >= self.alert_max_duration_seconds:
+            # Expirou: volta ao inicio. O paciente precisa ser reconfirmado
+            # na cama para voltar a MONITORANDO; ainda fora da cama, fica em
+            # AGUARDANDO sem gerar novo alerta (sem loop de re-alerta).
+            self.reset()
+            self._alert_expired_pending = True
+            return self.published_state  # AGUARDANDO, publicado ja
+        return published
+
+    def alert_seconds_elapsed(self) -> Optional[float]:
+        """Tempo decorrido no episodio de alerta atual (None fora de alerta)."""
+        if self._alert_started_at is None:
+            return None
+        return max(0.0, self._clock() - self._alert_started_at)
+
+    def consume_alert_expired(self) -> bool:
+        """True uma unica vez apos um episodio expirar (para log)."""
+        expired = self._alert_expired_pending
+        self._alert_expired_pending = False
+        return expired
+
+    def _update_core(
         self,
         analysis: Optional[PositionAnalysis],
         body_points: Optional[BodyPoints],
@@ -1233,6 +1287,27 @@ class PoseStateMachineEMA:
                 self.current_state = self.RISCO_POTENCIAL
             return
 
+    def restore_persistent_alert(self, elapsed_seconds: float = 0.0) -> None:
+        """
+        Restaura um alerta que estava ativo antes de um reinicio do processo
+        (watchdog, OOM, falha de camera, queda de energia).
+
+        Fail-safe: qualquer alerta anterior (RISCO, FORA ou PERSISTENTE)
+        volta como ALERTA_PERSISTENTE — sem historico de scores nao ha como
+        saber se o paciente voltou. Sai pelo caminho normal: evidencia
+        positiva consecutiva de paciente na cama, ou expiracao do episodio,
+        descontando `elapsed_seconds` ja decorridos antes do reinicio.
+        """
+        self._alert_started_at = self._clock() - max(0.0, float(elapsed_seconds))
+        self._alert_expired_pending = False
+        self.current_state = self.ALERTA_PERSISTENTE
+        self.published_state = self.ALERTA_PERSISTENTE
+        self.patient_confirmed = True
+        self._persistent_safe_counter = 0
+        self._frames_insufficient = 0
+        self._pending_published = None
+        self._pending_published_count = 0
+
     def get_state(self) -> str:
         """Retorna estado atual."""
         return self.current_state
@@ -1276,3 +1351,4 @@ class PoseStateMachineEMA:
         self._multi_person_window.clear()
         self._grace_counter = 0
         self._in_grace_period = False
+        self._alert_started_at = None

@@ -231,6 +231,22 @@ BED_REFERENCE_PATH = "data/bed_reference.json"
 # Diretório para logs de eventos
 LOGS_DIR = "data/logs"
 
+# Duracao maxima de um EPISODIO de alerta (RISCO -> FORA -> PERSISTENTE contam
+# como um so episodio, a partir da primeira entrada em alerta). O aparelho nao
+# tem teclado: sem isto, um alerta sem evidencia de resolucao (ex.: paciente
+# saiu do quarto) ficaria ativo para sempre. Ao expirar, a FSM volta para
+# AGUARDANDO e o paciente precisa ser reconfirmado na cama para voltar a ser
+# monitorado (paciente ainda fora da cama NAO gera novo alerta em loop).
+# Valor a validar com a equipe clinica.
+ALERT_MAX_DURATION_SECONDS = 60
+
+# Latch de alerta persistido em disco: um alerta ativo (RISCO/FORA/PERSISTENTE)
+# sobrevive a reinicio do processo ou do aparelho e volta como
+# ALERTA_PERSISTENTE, com o tempo de episodio JA decorrido descontado (a
+# expiracao conta em relogio de parede, inclusive com o aparelho desligado).
+# Gravado so nas transicoes alerta<->normal (desgaste desprezivel do SD).
+ALERT_LATCH_PATH = "data/alert_latch.json"
+
 # Configurações de visualização
 WINDOW_NAME = "Monitor de Quedas Hospitalares"
 DASHBOARD_WIDTH = 200  # Largura do painel lateral em pixels
@@ -303,6 +319,66 @@ RUNTIME_EDITABLE_KEYS = [
 ]
 
 
+# Faixas seguras (inclusivas) das chaves numericas editaveis. Fonte UNICA,
+# usada pelo overlay abaixo E pelo backend web: valores fora da faixa podem
+# desligar o alarme em silencio (ex.: EMA_ALPHA=0 congela os scores;
+# EMA_THRESHOLD_ENTER_RISK>1 nunca e atingido) e sao rejeitados.
+RUNTIME_VALUE_RANGES = {
+    "BED_RECHECK_INTERVAL_HOURS": (1, 72),
+    "BED_DETECTION_SENSITIVITY": (1, 10),
+    "EMA_ALPHA": (0.05, 0.9),
+    "EMA_THRESHOLD_ENTER_RISK": (0.2, 0.9),
+    "EMA_THRESHOLD_EXIT_RISK": (0.05, 0.8),
+    "POSE_CONFIDENCE_HIGH": (0.3, 0.95),
+    "POSE_FRAMES_TO_CONFIRM": (1, 60),
+    "FRAMES_TO_LOSE_PATIENT": (5, 150),
+}
+
+
+def validate_runtime_value(key: str, value, default=None):
+    """
+    Valida um valor de runtime contra tipo do default e faixa segura.
+
+    Returns:
+        (ok, valor_normalizado_ou_mensagem_de_erro)
+    """
+    if key not in RUNTIME_EDITABLE_KEYS:
+        return False, f"{key}: chave nao editavel"
+    if default is None:
+        default = globals().get(key)
+    # bool antes de int (bool é subclasse de int em Python)
+    if isinstance(default, bool):
+        if not isinstance(value, bool):
+            return False, f"{key}: esperado verdadeiro/falso"
+        return True, value
+    if isinstance(default, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, f"{key}: esperado numero"
+        if value != value:  # NaN
+            return False, f"{key}: valor invalido"
+        if isinstance(default, int) and float(value) != int(value):
+            return False, f"{key}: esperado numero inteiro"
+        lo, hi = RUNTIME_VALUE_RANGES.get(key, (None, None))
+        if lo is not None and not (lo <= value <= hi):
+            return False, f"{key}: fora da faixa segura [{lo}, {hi}]"
+        return True, type(default)(value)
+    if isinstance(default, str):
+        if not isinstance(value, str):
+            return False, f"{key}: esperado texto"
+        return True, value
+    return False, f"{key}: tipo nao suportado"
+
+
+def validate_runtime_consistency(values: dict):
+    """Regras entre chaves. Retorna mensagem de erro ou None."""
+    enter = values.get("EMA_THRESHOLD_ENTER_RISK")
+    exit_ = values.get("EMA_THRESHOLD_EXIT_RISK")
+    if enter is not None and exit_ is not None and exit_ >= enter:
+        return ("EMA_THRESHOLD_EXIT_RISK deve ser menor que "
+                "EMA_THRESHOLD_ENTER_RISK (histerese)")
+    return None
+
+
 def _apply_runtime_overrides() -> None:
     import json as _json
 
@@ -313,20 +389,25 @@ def _apply_runtime_overrides() -> None:
             _overrides = _json.load(_f)
         if not isinstance(_overrides, dict):
             return
+        _defaults = {k: globals()[k] for k in RUNTIME_EDITABLE_KEYS if k in globals()}
+        _accepted = {}
         for _key, _value in _overrides.items():
-            if _key not in RUNTIME_EDITABLE_KEYS or _key not in globals():
+            if _key not in _defaults:
                 continue
-            _default = globals()[_key]
-            # bool antes de int (bool é subclasse de int em Python)
-            if isinstance(_default, bool):
-                if isinstance(_value, bool):
-                    globals()[_key] = _value
-            elif isinstance(_default, (int, float)):
-                if isinstance(_value, (int, float)) and not isinstance(_value, bool):
-                    globals()[_key] = type(_default)(_value)
-            elif isinstance(_default, str):
-                if isinstance(_value, str):
-                    globals()[_key] = _value
+            _ok, _normalized = validate_runtime_value(_key, _value, _defaults[_key])
+            if _ok:
+                _accepted[_key] = _normalized
+            else:
+                print(f"[config] Override ignorado (default mantido): {_normalized}")
+        # Regras entre chaves: se violadas, descarta o par inteiro
+        _merged = dict(_defaults)
+        _merged.update(_accepted)
+        _err = validate_runtime_consistency(_merged)
+        if _err:
+            print(f"[config] Overrides de histerese ignorados: {_err}")
+            _accepted.pop("EMA_THRESHOLD_ENTER_RISK", None)
+            _accepted.pop("EMA_THRESHOLD_EXIT_RISK", None)
+        globals().update(_accepted)
     except Exception:
         # Overlay corrompido ou ilegível: segue com defaults (boot garantido)
         pass

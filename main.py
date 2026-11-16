@@ -47,6 +47,8 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 from ultralytics import YOLO
 
 from config import (
+    ALERT_MAX_DURATION_SECONDS,
+    ALERT_LATCH_PATH,
     BED_DETECTION_SENSITIVITY,
     BED_STANDBY_RETRY_SECONDS,
     COMPANION_ANALYSIS_ENABLED,
@@ -257,19 +259,80 @@ def send_heartbeat() -> None:
         pass
 
 
-def write_status_file(state: str, person_count: int = 0) -> None:
+def write_status_file(state: str, person_count: int = 0,
+                      physical_alert_ok: Optional[bool] = None) -> None:
     """Publica estado atual do monitor para o painel web (via tmpfs)."""
     if not IS_LINUX:
         return
     try:
         from modules.atomic_io import atomic_write_json
-        atomic_write_json(STATUS_FILE, {
+        payload = {
             "timestamp": time.time(),
             "state": state,
             "person_count": person_count,
-        })
+        }
+        if physical_alert_ok is not None:
+            # False = Raspberry sem GPIO funcional (LED de alerta inoperante)
+            payload["physical_alert_ok"] = physical_alert_ok
+        atomic_write_json(STATUS_FILE, payload)
     except Exception:
         pass
+
+
+def save_alert_latch(active: bool, state: str) -> None:
+    """
+    Persiste (ou limpa) o latch de alerta. Chamado so nas transicoes
+    alerta<->normal. Falha de escrita e logada e ignorada: o monitoramento
+    nunca para por causa do latch.
+    """
+    try:
+        if active:
+            from modules.atomic_io import atomic_write_json
+            atomic_write_json(ALERT_LATCH_PATH, {
+                "active": True,
+                "state": state,
+                "timestamp": time.time(),
+            })
+        elif os.path.exists(ALERT_LATCH_PATH):
+            os.remove(ALERT_LATCH_PATH)
+    except Exception as e:
+        log_exception("Falha ao persistir latch de alerta", e)
+
+
+def load_alert_latch() -> Optional[dict]:
+    """
+    Le o latch de alerta deixado por uma execucao anterior.
+
+    Returns:
+        dict do latch (com "elapsed_seconds" = tempo de episodio ja
+        decorrido) se ha alerta a restaurar, senao None. Latch corrompido e
+        tratado como ATIVO recem-iniciado (fail-safe, mas ainda com
+        expiracao); episodio que expirou durante o reinicio e descartado.
+    """
+    import json
+    if not os.path.exists(ALERT_LATCH_PATH):
+        return None
+    try:
+        with open(ALERT_LATCH_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or not data.get("active"):
+            return None
+    except Exception:
+        # Arquivo existe mas ilegivel: so e criado quando ha alerta -> restaura
+        return {"active": True, "state": "?", "timestamp": None, "elapsed_seconds": 0.0}
+
+    elapsed = 0.0
+    ts = data.get("timestamp")
+    if isinstance(ts, (int, float)):
+        # Negativo = relogio voltou (sem RTC): conta como recem-iniciado
+        elapsed = max(0.0, time.time() - ts)
+    if elapsed >= ALERT_MAX_DURATION_SECONDS:
+        logger.warning(f"Episodio de alerta anterior ao reinicio expirou "
+                       f"({elapsed:.0f}s >= {ALERT_MAX_DURATION_SECONDS}s) - descartado")
+        save_alert_latch(False, "")
+        return None
+    data["elapsed_seconds"] = elapsed
+    return data
 
 
 def log_exception(context: str, exc: Exception) -> None:
@@ -956,6 +1019,24 @@ def run_monitoring_loop(
     # Log inicio do monitoramento
     alert_logger.log_info("Sistema de monitoramento iniciado")
 
+    # Restaura alerta ativo de uma execucao anterior (restart por watchdog,
+    # OOM, falha de camera ou queda de energia). Sem isto, um paciente caido
+    # fora do quadro virava AGUARDANDO apos qualquer reinicio.
+    latch = load_alert_latch()
+    latch_persisted = latch is not None
+    if latch is not None:
+        elapsed = float(latch.get("elapsed_seconds") or 0.0)
+        pose_fsm.restore_persistent_alert(elapsed_seconds=elapsed)
+        previous_pose_state = pose_fsm.current_state
+        msg = (f"Alerta anterior ao reinicio restaurado como ALERTA_PERSISTENTE "
+               f"(estado salvo: {latch.get('state')}, episodio ha {elapsed:.0f}s, "
+               f"expira em {max(0.0, ALERT_MAX_DURATION_SECONDS - elapsed):.0f}s)")
+        logger.warning(msg)
+        alert_logger.log_alert(
+            PoseStateMachineEMA.ALERTA_PERSISTENTE,
+            details=f"{msg} | episodio restaurado",
+        )
+
     # Loop Principal de Monitoramento
     while True:
         try:
@@ -964,7 +1045,8 @@ def run_monitoring_loop(
             # Envia heartbeat periodicamente (watchdog + status para o painel)
             if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
                 send_heartbeat()
-                write_status_file(pose_fsm.current_state, last_person_count)
+                write_status_file(pose_fsm.current_state, last_person_count,
+                                  gpio_manager.physical_alert_ok)
                 last_heartbeat = time.time()
 
             ret, frame = camera.read()
@@ -1016,14 +1098,23 @@ def run_monitoring_loop(
                 # Evento raro (a cada horas): carrega o modelo de cama, roda e
                 # libera. Heartbeat antes/depois pois o stall e de varios segundos
                 send_heartbeat()
-                validate_model_file(YOLO_BED_MODEL)
-                bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
-                # SEMPRE o mesmo pre-processamento da calibracao (normalizado +
-                # cru), independente da normalizacao IR sob demanda do loop —
-                # senao referencia e recheck sao comparados sobre imagens diferentes
-                bed_frame, bed_raw = prepare_bed_frames(raw_frame)
-                result = bed_detector.detect_bed_detailed(bed_frame, raw_frame=bed_raw)
-                bed_detector.release_model()
+                result = None
+                try:
+                    validate_model_file(YOLO_BED_MODEL)
+                    bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
+                    # SEMPRE o mesmo pre-processamento da calibracao (normalizado +
+                    # cru), independente da normalizacao IR sob demanda do loop —
+                    # senao referencia e recheck sao comparados sobre imagens diferentes
+                    bed_frame, bed_raw = prepare_bed_frames(raw_frame)
+                    result = bed_detector.detect_bed_detailed(bed_frame, raw_frame=bed_raw)
+                except Exception as e:
+                    # Recheck e opcional: falha (modelo ausente/corrompido, OOM)
+                    # nunca pode derrubar o monitoramento. Sem o postpone, o
+                    # recheck seria retentado em todo frame -> 30 erros -> restart
+                    log_exception("Recheck da cama falhou - referencia mantida", e)
+                    result = None
+                finally:
+                    bed_detector.release_model()
                 send_heartbeat()
                 if result is not None:
                     new_bbox, class_name, confidence, score = result
@@ -1137,6 +1228,12 @@ def run_monitoring_loop(
 
             # Atualiza maquina de estados de pose
             pose_state = pose_fsm.update(analysis, body_points, person_count)
+            if pose_fsm.consume_alert_expired():
+                msg = (f"Episodio de alerta EXPIRADO apos {ALERT_MAX_DURATION_SECONDS}s "
+                       f"sem evidencia de resolucao - monitor volta a AGUARDANDO "
+                       f"(paciente sera reconfirmado ao deitar)")
+                logger.warning(msg)
+                alert_logger.log_info(f"ALERTA_EXPIRADO | {msg}")
             pose_state_enum = PatientPoseState(pose_state)
 
             # Atualiza monitor (fail-safe: nunca "Cama Vazia" com alerta ativo)
@@ -1218,10 +1315,16 @@ def run_monitoring_loop(
 
             # Controle de alerta GPIO: usa o estado BRUTO da FSM (sem dwell de
             # publicacao) para acionar o alerta fisico o mais cedo possivel
-            if pose_fsm.current_state in PoseStateMachineEMA.ALERT_STATES:
+            alert_active = pose_fsm.current_state in PoseStateMachineEMA.ALERT_STATES
+            if alert_active:
                 gpio_manager.start_risk_alert()
             else:
                 gpio_manager.stop_risk_alert()
+
+            # Latch em disco so nas transicoes alerta<->normal
+            if alert_active != latch_persisted:
+                save_alert_latch(alert_active, pose_fsm.current_state)
+                latch_persisted = alert_active
 
             # Exibicao no display (apenas com display real)
             key = -1
@@ -1340,8 +1443,21 @@ def main():
                 # Modelo de cama e carregado apenas aqui (lazy) e liberado apos
                 # a calibracao — nao pode ficar residente junto do pose no RPi
                 if bed_detector.model is None:
-                    validate_model_file(YOLO_BED_MODEL)
-                    bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
+                    try:
+                        validate_model_file(YOLO_BED_MODEL)
+                        bed_detector.ensure_model_loaded(YOLO_BED_MODEL)
+                    except Exception as e:
+                        bed_detector.release_model()
+                        # Modelo de cama ausente/corrompido/OOM NAO pode deixar
+                        # o leito sem cobertura se ja existe referencia salva
+                        if saved_reference:
+                            log_exception(
+                                "Modelo de cama indisponivel - usando referencia salva "
+                                f"{saved_reference} (corrigir {YOLO_BED_MODEL})", e
+                            )
+                            bed_bbox = saved_reference
+                            break
+                        raise
                     send_heartbeat()
 
                 elapsed = time.time() - calibration_start_time

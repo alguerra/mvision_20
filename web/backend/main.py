@@ -208,6 +208,9 @@ async def update_settings(
     success, message = save_system_settings(settings_dict)
     if success:
         return {"success": True, "message": message}
+    elif message.startswith("Configuracoes NAO salvas"):
+        # Valor fora da faixa segura: erro do cliente, nao do servidor
+        raise HTTPException(status_code=422, detail=message)
     else:
         raise HTTPException(status_code=500, detail=message)
 
@@ -456,15 +459,30 @@ if FRONTEND_DIR.exists():
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         """Serve frontend static files."""
-        # Try exact file first
-        file_path = FRONTEND_DIR / full_path
-        if file_path.is_file():
-            return FileResponse(file_path)
+        # Rota publica (sem auth): o caminho resolvido TEM de ficar dentro de
+        # FRONTEND_DIR. Sem isso, "/%2e%2e/..." ou "//etc/passwd" leriam
+        # config/web_auth.json, imagens de alerta, logs, ~/.ssh etc.
+        frontend_root = FRONTEND_DIR.resolve()
 
-        # Try with .html extension
-        html_path = FRONTEND_DIR / f"{full_path}.html"
-        if html_path.is_file():
-            return FileResponse(html_path)
+        def _safe(candidate: Path) -> Optional[Path]:
+            try:
+                resolved = candidate.resolve()
+            except (OSError, RuntimeError, ValueError):
+                return None
+            if resolved != frontend_root and frontend_root not in resolved.parents:
+                return None
+            return resolved if resolved.is_file() else None
+
+        if "\x00" not in full_path:
+            # Try exact file first
+            file_path = _safe(FRONTEND_DIR / full_path)
+            if file_path is not None:
+                return FileResponse(file_path)
+
+            # Try with .html extension
+            html_path = _safe(FRONTEND_DIR / f"{full_path}.html")
+            if html_path is not None:
+                return FileResponse(html_path)
 
         # For SPA routing, serve index.html
         index_path = FRONTEND_DIR / "index.html"
